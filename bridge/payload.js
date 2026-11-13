@@ -1,5 +1,5 @@
 /*
- * civ_bridge.js — ns2jb wire-protocol console bridge for the CivSwitch (Civ 7) loader.
+ * payload.js — ns2jb wire-protocol console bridge for the CivSwitch (Civ 7) loader.
  *
  * Eval'd inside the CivSwitch loader closure (TCP :9026); all BRIDGE-CONTRACT.md §1
  * primitives (read64/write64/.../call_rop/malloc/free/socket family/log) are in scope.

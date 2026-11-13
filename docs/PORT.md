@@ -8,13 +8,13 @@ and an RO payload are installed, and installed system programs can be dumped
 (CodeFS `main.npdm` + `main`).
 
 ```
-Civ7 chat XSS -> Remote JS Loader :9026 -> bridge/civ_bridge.js
+Civ7 chat XSS -> Remote JS Loader :9026 -> bridge/payload.js
    -> port/engine (PC) -> fs reserved-gap race -> FS arbitrary R/W
    -> retained endpoint -> RO payload -> firmware dump
 ```
 
 Stage 1 (the SmileBASIC interpreter bug that ns2jb originally used) is not part
-of this chain: `bridge/civ_bridge.js` speaks the same ns2jb wire protocol straight over
+of this chain: `bridge/payload.js` speaks the same ns2jb wire protocol straight over
 the loader's TCP connection.
 
 ## Status
@@ -44,7 +44,7 @@ primitives and the anchor chain, which `check_loader.py` verifies before use.
 
 ```sh
 # one command: resolves this computer's address on the route to the console,
-# waits on :39380, pushes bridge/civ_bridge.js to the loader, runs the chain,
+# waits on :39380, pushes bridge/payload.js to the loader, runs the chain,
 # and leaves the verified native RPC held for an MCP client.
 node engine/run.cjs 192.168.2.118
 
@@ -63,7 +63,7 @@ node engine/run.cjs 192.168.2.118 --no-send
 ```
 
 The engine owns the whole cycle, so there is no second script to run: it injects
-this computer's address into `bridge/civ_bridge.js`, streams the console log
+this computer's address into `bridge/payload.js`, streams the console log
 (every console-side line is prefixed `ReiAyanami:` and walks through five numbered
 steps), and prints the run folder. On a held run it prints the MCP attach file
 (`<run>/connection.json`).
@@ -86,8 +86,8 @@ Manual alternative (any OS), if you prefer to drive the engine yourself:
 ```sh
 node engine/run.cjs 192.168.2.118 --no-send   # listens on :39380
 # in another terminal, after "Run folder:" appears, set PC_IP in
-# bridge/civ_bridge.js to this computer's address and push it:
-python3 send_js.py 192.168.2.118 9026 bridge/civ_bridge.js
+# bridge/payload.js to this computer's address and push it:
+python3 send_js.py 192.168.2.118 9026 bridge/payload.js
 ```
 
 ## Held run and the device MCP
@@ -124,7 +124,7 @@ offers. A timed-out native request must not be replayed.
 
 | Path | What |
 |---|---|
-| `bridge/civ_bridge.js` | Console payload: ns2jb wire protocol over the loader (HELLO, RPC loop, 6-argument continuation) |
+| `bridge/payload.js` | Console payload: ns2jb wire protocol over the loader (HELLO, RPC loop, 6-argument continuation) |
 | `bridge/test_bridge.py`, `bridge/test_civ_bridge.cjs` | PC-side bridge harness and bridge unit tests |
 | `engine/` | The runner and the chain: `run.cjs` is the one command (address, bridge push, hold); `rpc.cjs`, `dump-firmware.cjs`, `lib/` (bridge, connection, native, loader), `shared/`, and one process per stage under `switch2/` |
 | `targets/civ7/` | Civ7 profile (`target.json`) plus every offset table it uses (`sdk-functions.json`, `sdk-layout.json`, `app/*.json`) |

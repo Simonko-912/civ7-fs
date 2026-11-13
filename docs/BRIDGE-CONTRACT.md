@@ -100,7 +100,7 @@ Source of truth: `ns2jb-main/engine/lib/native.cjs`, `engine/lib/connection.cjs`
 
 ## 3. Port layers (workstreams)
 
-- **A. Console bridge** (`port/civ_bridge.js` + `port/test_bridge.py`):
+- **A. Console bridge** (`port/payload.js` + `port/test_bridge.py`):
   implements §2 over §1 primitives. HELLO fields from a CONFIG block at top.
 - **B. Constants**: Civ7 equivalents for every offset the engine uses
   (`ns2jb-main/engine/shared/sdk-functions.json`, `sdk-layout.json`, plus every

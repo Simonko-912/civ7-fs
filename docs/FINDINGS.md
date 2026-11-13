@@ -15,7 +15,7 @@ placeholders (`<PC_IP>`, `<CONSOLE_IP>`, etc.).
 
 ```
 CivSwitch loader (Civ 7, Cohtml/Coherent Gameface 1.59, TCP :9026)
-      │  civ_bridge.js  (eval'd in the loader; 128-byte HELLO + RPC loop)
+      │  payload.js  (eval'd in the loader; 128-byte HELLO + RPC loop)
       │  connects OUT to the PC engine on TCP :39380
       ▼
 PC engine (Node, port/engine/*)  — drives the exploit over RPC
@@ -26,7 +26,7 @@ Switch 2 fs process — reserved-gap race → canary overwrite → cache leak �
 
 - **Loader / transport:** CivSwitch's Remote JS Loader on `:9026`. Payloads are pushed
   with `send_payload.py <CONSOLE_IP> 9026 <file.js>`.
-- **Bridge:** `port/civ_bridge.js` is eval'd inside the loader, opens an outbound socket
+- **Bridge:** `port/payload.js` is eval'd inside the loader, opens an outbound socket
   to the PC engine, and serves a small RPC protocol (see `BRIDGE-CONTRACT.md`).
 - **Engine:** `port/engine/` is the PC-side driver. `node engine/run.cjs <PC_IP>` from
   `port/` listens on `:39380` and runs the staged pipeline against the console.
@@ -180,7 +180,7 @@ cleanly.** Save-health signal: a win within the first ~10 positive waves.
 - `port/APP-OFFSETS-REPORT.md`, `port/CORE-OFFSETS-REPORT.md`,
   `port/MOUNT-OFFSETS-REPORT.md`, `port/RESIDUAL-OFFSETS-REPORT.md` — offset tables + runtime results.
 - `port/PORT-FS-REQUIREMENTS.md`, `port/PORT-APP-LAYER.md` — requirements/design.
-- `port/civ_bridge.js` — the in-loader bridge.
+- `port/payload.js` — the in-loader bridge.
 - `port/engine/` — the PC-side driver (minus per-run logs).
 - `port/engine/switch2/memory/probe-reserved-gap.cjs` — the reserved-gap race.
 - `port/probes/`, `port/tools/` — hardware probes and offline validators.

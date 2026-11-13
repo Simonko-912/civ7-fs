@@ -1,6 +1,6 @@
 # CivSwitch ↔ ns2jb bridge — deployment & testing (Workstream A)
 
-`civ_bridge.js` implements the ns2jb wire protocol (BRIDGE-CONTRACT.md §2) on top of
+`payload.js` implements the ns2jb wire protocol (BRIDGE-CONTRACT.md §2) on top of
 the CivSwitch loader's JS primitives (§1). It replaces the SmileBASIC console-side
 loop (`ns2jb-main/bootstrap.bas`, `RPC()`) with a JavaScript equivalent running
 inside the Civ 7 process.
@@ -9,7 +9,7 @@ inside the Civ 7 process.
 
 | File | Role |
 |---|---|
-| `bridge/civ_bridge.js` | Console-side payload. Eval'd by the CivSwitch loader; connects out to the PC, sends HELLO, runs the RPC loop. |
+| `bridge/payload.js` | Console-side payload. Eval'd by the CivSwitch loader; connects out to the PC, sends HELLO, runs the RPC loop. |
 | `bridge/test_bridge.py` | PC-side standalone test harness (stdlib only). Listens, parses HELLO, runs query / malloc-free / memset+memcpy / terminate checks. |
 
 ## Prerequisites
@@ -17,7 +17,7 @@ inside the Civ 7 process.
 - Switch 2, fw 23.0.1, running **Civ 7** with the **CivSwitch loader listening on TCP :9026**.
 - PC and console on the same LAN.
 - Console knows the PC's IPv4 — set it in the `CONFIG` block at the top of
-  `bridge/civ_bridge.js` (`PC_IP`, default `PC_PORT` 39380).
+  `bridge/payload.js` (`PC_IP`, default `PC_PORT` 39380).
 
 ## Deploy & run
 
@@ -30,7 +30,7 @@ inside the Civ 7 process.
 2. Send the bridge payload to the loader (send_payload.py is in the workspace root):
 
    ```
-   python send_js.py <CONSOLE_IP> 9026 bridge/civ_bridge.js
+   python send_js.py <CONSOLE_IP> 9026 bridge/payload.js
    ```
 
    Progress lines (`scratch = ...`, `svcQueryMemory wrapper = ...`, `connected to PC`,
@@ -70,7 +70,7 @@ the payload; the failed eval leaves nothing resident.
 
 ## HELLO field status (Civ7 values)
 
-| Field | Source in civ_bridge.js |
+| Field | Source in payload.js |
 |---|---|
 | `scratch`, `scratchBytes` | `malloc(0x80000)` at runtime (or `CONFIG.SCRATCH`) |
 | `main`, `sdk` | Resolved at runtime via `svcQueryMemory` on the `main_base` / `sdk_base` anchors. |

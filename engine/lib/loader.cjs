@@ -5,13 +5,13 @@ const net = require('node:net');
 const dgram = require('node:dgram');
 const path = require('node:path');
 
-const BRIDGE_FILE = path.join(__dirname, '../../bridge/civ_bridge.js');
+const BRIDGE_FILE = path.join(__dirname, '../../bridge/payload.js');
 const LOADER_PORT = 9026;
 
 function injectAddress(source, pcIp) {
   if (!net.isIPv4(pcIp)) throw Error('Not an IPv4 address to inject: ' + pcIp);
   const match = /PC_IP:\s*'[^']*'/.exec(source);
-  if (!match) throw Error('civ_bridge.js has no PC_IP entry to fill in');
+  if (!match) throw Error('payload.js has no PC_IP entry to fill in');
   return source.slice(0, match.index) + `PC_IP: '${pcIp}'` + source.slice(match.index + match[0].length);
 }
 

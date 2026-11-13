@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PC-side standalone test harness for port/civ_bridge.js (stdlib only).
+"""PC-side standalone test harness for port/payload.js (stdlib only).
 
 Listens on a TCP port, accepts the console's outbound connection, reads and
 prints the 128-byte HELLO (relaxed validation: parse + display, warn only),

@@ -6,14 +6,14 @@ The port is coupled to core.js through a small fixed contract. Everything else
 port, so a core.js update is safe exactly when this checker passes.
 
 Contract checked here:
-  1. the primitives `civ_bridge.js` uses exist in the loader's eval scope
+  1. the primitives `payload.js` uses exist in the loader's eval scope
      (they are closure locals of core.js, so `eval` sees them - BRIDGE-CONTRACT.md 1);
   2. `call_rop` still takes six arguments (record B continuation);
   3. the anchor chain still yields the SDK offsets the engine drives:
      `sdk_base = memcpy_addr - <memcpy text offset>` and the memmove entry;
   4. the libc entry points the bridge/engine reuse are unchanged
      (calloc at main_base+0x515b50, free at main_base+0x515a60);
-  5. `bridge/civ_bridge.js` and `targets/civ7/target.json` agree with each other and
+  5. `bridge/payload.js` and `targets/civ7/target.json` agree with each other and
      with the artifact tables.
 
 Usage:
@@ -31,7 +31,7 @@ from pathlib import Path
 
 PORT = Path(__file__).resolve().parents[1]
 
-# Payload-visible primitives consumed by civ_bridge.js (a superset of what the
+# Payload-visible primitives consumed by payload.js (a superset of what the
 # bridge itself calls is fine; these are the ones whose absence breaks it).
 PRIMITIVES = [
     "read8", "read16", "read32", "read64",
@@ -77,7 +77,7 @@ def main() -> int:
     text = source.read_text()
     sdk = json.loads(Path(args.sdk_functions).read_text())
     target = json.loads(Path(args.target).read_text())
-    bridge = (PORT / "bridge" / "civ_bridge.js").read_text()
+    bridge = (PORT / "bridge" / "payload.js").read_text()
     c = Checker()
 
     print(f"loader: {source}")

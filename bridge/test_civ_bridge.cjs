@@ -8,7 +8,7 @@ const {injectAddress} = require('../engine/lib/loader.cjs');
 // The payload ships with a PC_IP placeholder; the engine fills it in per run.
 const PC_IP = '192.0.2.15';
 const bridgeSource = () => injectAddress(
-  fs.readFileSync(path.join(__dirname, 'civ_bridge.js'), 'utf8'), PC_IP);
+  fs.readFileSync(path.join(__dirname, 'payload.js'), 'utf8'), PC_IP);
 
 const REQUEST_BYTES = 0x8080;
 const RESPONSE_BYTES = 0x8010;
@@ -150,7 +150,7 @@ test('Civ bridge completes HELLO, native RPC reads/writes, and clean termination
   env.queue(Buffer.concat([query, readRequest, writeRequest, Buffer.alloc(REQUEST_BYTES)]));
 
   const sourceCode = bridgeSource();
-  await vm.runInNewContext(sourceCode, env.context, {filename: 'civ_bridge.js'});
+  await vm.runInNewContext(sourceCode, env.context, {filename: 'payload.js'});
 
   const stream = Buffer.concat(env.sent);
   assert.equal(stream.length, 128 + 3 * RESPONSE_BYTES, env.logs.join('\n'));
@@ -191,7 +191,7 @@ test('Civ bridge prints a LOG1 record on the console instead of calling it', asy
   message.copy(logRequest, 0x80);                        // request data area
   env.queue(Buffer.concat([logRequest, Buffer.alloc(REQUEST_BYTES)]));
 
-  await vm.runInNewContext(bridgeSource(), env.context, {filename: 'civ_bridge.js'});
+  await vm.runInNewContext(bridgeSource(), env.context, {filename: 'payload.js'});
 
   assert.equal(env.logs.filter(line => line === 'ReiAyanami: > phase 2/4 FS acquisition').length, 1,
     env.logs.join(' | '));
@@ -203,7 +203,7 @@ test('Civ bridge prints a LOG1 record on the console instead of calling it', asy
 test('Civ bridge releases allocations when SDK discovery fails', async () => {
   const env = environment();
   const sourceCode = bridgeSource();
-  await vm.runInNewContext(sourceCode, env.context, {filename: 'civ_bridge.js'});
+  await vm.runInNewContext(sourceCode, env.context, {filename: 'payload.js'});
   assert.ok(env.logs.some(line => line.includes('svcQueryMemory not found')));
   assert.deepEqual(env.freed, [env.aux, env.scratch]);
   assert.equal(env.closed(), false);
@@ -223,7 +223,7 @@ test('Civ bridge passes all six arguments through a continuation record', async 
   const continuation = record(2n, 5n, 6n, 0n, 0n);
   env.queue(Buffer.concat([request(a, continuation), Buffer.alloc(REQUEST_BYTES)]));
   const sourceCode = bridgeSource();
-  await vm.runInNewContext(sourceCode, env.context, {filename: 'civ_bridge.js'});
+  await vm.runInNewContext(sourceCode, env.context, {filename: 'payload.js'});
   assert.deepEqual(calls, [[1n, 2n, 3n, 4n, 5n, 6n]]);
   const stream = Buffer.concat(env.sent);
   assert.equal(stream.length, 128 + RESPONSE_BYTES);

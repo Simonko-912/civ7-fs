@@ -35,7 +35,7 @@ them onto this tree.
 
 | Referenced in archival docs as | Actually here |
 |---|---|
-| `port/civ_bridge.js` | [`../bridge/civ_bridge.js`](../bridge/civ_bridge.js) |
+| `port/payload.js` | [`../bridge/payload.js`](../bridge/payload.js) |
 | `port/test_bridge.py`, `port/test_civ_bridge.cjs` | [`../bridge/`](../bridge/) |
 | `port/sdk-functions.civ7.json` | [`../targets/civ7/sdk-functions.json`](../targets/civ7/sdk-functions.json) |
 | `port/sdk-layout.civ7.json` | [`../targets/civ7/sdk-layout.json`](../targets/civ7/sdk-layout.json) |

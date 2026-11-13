@@ -217,7 +217,7 @@ async function main(args = process.argv.slice(2)) {
       '  --app-only       stop after app qualification; no FS mutation\n' +
       '  --dump-firmware  also capture installed system-program CodeFS\n' +
       '  --no-hold        exit after the chain instead of holding the native RPC\n' +
-      '  --no-send        do not push bridge/civ_bridge.js; push it yourself\n' +
+      '  --no-send        do not push bridge/payload.js; push it yourself\n' +
       'Civ7 is the default target; --target smilebasic keeps the SmileBASIC flow.');
     return;
   }
@@ -235,7 +235,7 @@ async function main(args = process.argv.slice(2)) {
     host = await localAddressFor(consoleHost);
   } else host = await chooseHost(options.hostArgs);
   const command = target.name === 'smilebasic' ? connectCommand(host, basicArgs) :
-    `bridge/civ_bridge.js -> this computer at ${host}:${port}`;
+    `bridge/payload.js -> this computer at ${host}:${port}`;
   const workspace = path.join(OUTPUT_ROOT, 'runs');
   await fs.mkdir(workspace, {recursive: true, mode: 0o700});
   let dumpDirectory;
@@ -269,12 +269,12 @@ async function main(args = process.argv.slice(2)) {
       } else {
         console.log('ReiAyanami: bridge -> this computer at ' + host + ':' + port);
         if (options.send) {
-          console.log('ReiAyanami: pushing bridge/civ_bridge.js to the loader on ' +
+          console.log('ReiAyanami: pushing bridge/payload.js to the loader on ' +
             consoleHost + ':' + LOADER_PORT);
           sendBridge({console: consoleHost, pcIp: host, log: line => console.log(line)})
             .then(() => console.log('ReiAyanami: bridge closed'))
             .catch(error => console.error('ReiAyanami: bridge push failed: ' + error.message));
-        } else console.log('ReiAyanami: push bridge/civ_bridge.js yourself, or drop --no-send.');
+        } else console.log('ReiAyanami: push bridge/payload.js yourself, or drop --no-send.');
       }
       console.log('Run folder: ' + directory);
     }});

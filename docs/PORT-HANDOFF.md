@@ -125,7 +125,7 @@ memmove 0x5872f0, svcQueryMemory 0x158314, SDK_BYTES 0x5e1000.
 ## 4. Port status by workstream
 
 ### A. Console bridge — DONE, hardware-verified
-`port/civ_bridge.js`, `port/test_bridge.py`, and `port/test_civ_bridge.cjs` implement and
+`port/payload.js`, `port/test_bridge.py`, and `port/test_civ_bridge.cjs` implement and
 verify HELLO, RPC calls, memory read/write, and clean shutdown. The hardware harness passed.
 The bridge auto-resolves the SDK base, memmove `0x522830`, and text CRC `157086863`.
 
@@ -179,7 +179,7 @@ Windows support, and an `--app-only` stop before save cleanup/acquisition. See
 | `recon*.js` | Hardware probes (4c = full memory map; 5 crashed on XHR — do not resend 5) |
 | `dump/` | Civ7 sdk module dump (see §2) |
 | `ns2jb-main/` | Supplied kurumuz/ns2jb source (DO NOT EDIT) |
-| `port/civ_bridge.js` `test_bridge.py` `test_civ_bridge.cjs` | Bridge and offline/hardware tests |
+| `port/payload.js` `test_bridge.py` `test_civ_bridge.cjs` | Bridge and offline/hardware tests |
 | `port/engine/` | Config-driven PC engine and staged `--app-only` runner |
 | `port/probes/` | Bounded mount/save-space/allocation probes |
 | `port/OFFSETS-REPORT.md` | Consolidated offsets, validation, and hardware status |
@@ -217,11 +217,11 @@ deleted); fully tethered — everything vanishes on reboot (also restores RO cle
 
 ### 8.3 Civ7 bridge and app-only bring-up
 1. From the workspace, run `python -u port/test_bridge.py --host <PC_IP>`.
-2. In another terminal, run `python -u send_payload.py <CONSOLE_IP> 9026 port/civ_bridge.js`.
+2. In another terminal, run `python -u send_payload.py <CONSOLE_IP> 9026 port/payload.js`.
 3. For the bounded probes, send `port/probes/probe_mount_list.js`,
    `probe_save_free_space.js`, and `probe_allocation_36m.js` one at a time.
 4. App-only engine: `cd port && node engine/run.cjs --app-only <PC_IP>`, then send
-   `port/civ_bridge.js` as above. On this PC, Node 24 is available through VSCodium with
+   `port/payload.js` as above. On this PC, Node 24 is available through VSCodium with
    `ELECTRON_RUN_AS_NODE=1` in the environment.
 5. App-only stops before save cleanup and FS acquisition. Keep the generated run folder on failure.
 

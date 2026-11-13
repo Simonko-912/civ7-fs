@@ -36,10 +36,10 @@ node .\port\engine\run.cjs <PC_IP>
 等它打印 `Run folder: …` 与 `Waiting for Civilization VII via CivSwitch at <PC_IP>:39380.` 后：
 
 ```powershell
-python -u .\save-tools\send_js.py <S2_IP> .\port\civ_bridge.js
+python -u .\save-tools\send_js.py <S2_IP> .\port\payload.js
 ```
 
-桥接文件用 `port\civ_bridge.js`；首次使用前先跑 `set-pc-ip.ps1 -PcIp <PC_IP>` 把 PC 地址写进去。
+桥接文件用 `port\payload.js`；首次使用前先跑 `set-pc-ip.ps1 -PcIp <PC_IP>` 把 PC 地址写进去。
 
 ## 4. 判读
 

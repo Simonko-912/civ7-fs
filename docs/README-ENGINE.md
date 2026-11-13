@@ -12,7 +12,7 @@ node engine/rpc.cjs RUN_FOLDER status
 node engine/dump-firmware.cjs [--target civ7|smilebasic] [computer-IP]
 ```
 
-Civ7 is the default. `NS2_TARGET=civ7` or `NS2_TARGET=smilebasic` can also select the target. Civ7 UX asks the operator to set `PC_IP`/`PC_PORT` in `civ_bridge.js` and launch the completed CivSwitch bridge (`bridge/civ_bridge.js`); the SmileBASIC target retains the original BASIC command flow.
+Civ7 is the default. `NS2_TARGET=civ7` or `NS2_TARGET=smilebasic` can also select the target. Civ7 UX asks the operator to set `PC_IP`/`PC_PORT` in `payload.js` and launch the completed CivSwitch bridge (`bridge/payload.js`); the SmileBASIC target retains the original BASIC command flow.
 
 Use `node engine/run.cjs --app-only <PC_IP>` for staged Civ7 bring-up. This runs the bootstrap checks, memory map, mount inspection, and one-worker app qualification, then exits. It stops **before** save-file cleanup, FS acquisition, RO, PM, and all FS mutation. `--app-only` cannot be combined with `--rpc` or `--dump-firmware`.
 
