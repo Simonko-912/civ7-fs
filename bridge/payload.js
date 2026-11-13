@@ -26,7 +26,11 @@
   // Edit before deployment, or keep defaults and let runtime resolution run.
   const CONFIG = {
     // --- PC endpoint (the PC listens; we connect out) ---
-    PC_IP: '<PC_IP>',   // <-- set to the PC's LAN IPv4
+    // Left as the placeholder, the bridge derives the peer address from the
+    // loader's accepted client socket — which is the machine that delivered
+    // this payload (works for LDN-only SD delivery via ZL). Set an explicit
+    // IPv4 here for static setups; the node engine always injects its own.
+    PC_IP: '<PC_IP>',
     PC_PORT: 39380,           // ns2jb default
 
     // --- HELLO fields (u64). 0n = "auto-resolve at runtime" where supported ---
@@ -163,7 +167,19 @@
     }
 
     // ---- 5. connect out to the PC ----
-    const ipParts = CONFIG.PC_IP.split('.').map(Number);
+    let pcIp = CONFIG.PC_IP;
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(pcIp)) {
+      // LDN/manual flow: the delivering host is also our RPC peer. The loader
+      // kept the accepted client address in its closure sockaddr_in.
+      try {
+        if (typeof sockaddr_in !== 'undefined' && typeof read8 === 'function') {
+          const a = Number(read8(sockaddr_in + 4n)), b = Number(read8(sockaddr_in + 5n));
+          const c = Number(read8(sockaddr_in + 6n)), d = Number(read8(sockaddr_in + 7n));
+          if (a || b || c || d) pcIp = a + '.' + b + '.' + c + '.' + d;
+        }
+      } catch (_) {/* fall through to the explicit-address error */}
+    }
+    const ipParts = String(pcIp).split('.').map(Number);
     if (ipParts.length !== 4 || ipParts.some(v => !Number.isInteger(v) || v < 0 || v > 255)) {
       await say('[4/5] FAILED: bad PC_IP "' + CONFIG.PC_IP + '"'); return;
     }
@@ -178,7 +194,7 @@
 
     fd = socket(2n, 1n, 0n);   // AF_INET, SOCK_STREAM, IPPROTO_IP
     if (fd < 0n) { await say('[4/5] FAILED: socket() returned ' + fd); return; }
-    await say('[4/5] dialling   ' + CONFIG.PC_IP + ':' + port);
+    await say('[4/5] dialling   ' + pcIp + ':' + port);
     const cr = connect(fd, saBuf, 16n);
     if (cr !== 0n) { await say('[4/5] FAILED: connect() returned ' + cr +
       ' - start the engine first: node port/engine/run.cjs <console-ip>'); return; }
