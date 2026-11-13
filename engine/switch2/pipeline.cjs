@@ -124,15 +124,23 @@ async function main() {
     let captured = await ensureCapture();
     if (!holdsCapture(captured)) {
       note('metadata repair did not install the capture; retiring and re-acquiring');
+      // The retire failure and the re-acquisition failure mean different things: the
+      // first leaves the endpoint to the RO stages, the second ends the run. Only the
+      // first is swallowed - BVz90B reported a failed acquisition as 'install-retained
+      // failed' because this catch swallowed it.
+      let retired = true;
       try {
         await stage('Retire the uncaptured endpoint', () => acquisition.retire());
+      } catch (error) {
+        retired = false;
+        note('cannot retire this endpoint: ' + (error.message || error));
+      }
+      if (retired) {
         await stage('FS read, write and restoration (capture retry)', async () => {
           acquisition = await startAcquisition();
           return {report: acquisition.report, proof: acquisition.proof};
         });
         captured = await ensureCapture();
-      } catch (error) {
-        note('cannot retire this endpoint: ' + (error.message || error));
       }
     }
     await script('ro', 'install-retained');

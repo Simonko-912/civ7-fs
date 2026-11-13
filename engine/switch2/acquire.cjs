@@ -74,9 +74,13 @@ async function start() {
           }
         }
         if (report?.memoryControl?.ready) break;
-        if (exited || spawnError || Date.now() >= deadline)
-          throw Error(spawnError?.message || logError?.message || report?.error?.split('\n')[0] ||
+        if (exited || spawnError || Date.now() >= deadline) {
+          // The probe stores a stack string, so its first line already reads
+          // 'Error: ...'. Strip that prefix or every caller prints 'Error: Error: ...'.
+          const reported = report?.error?.split('\n')[0].replace(/^Error:\s*/, '');
+          throw Error(spawnError?.message || logError?.message || reported ||
             'FS acquisition exited or timed out before memory was ready');
+        }
         await delay(500);
       }
       if (report.session !== a.session || report.error || report.cleanupError)

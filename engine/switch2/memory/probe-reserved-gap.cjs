@@ -849,7 +849,10 @@ async function main() {
         // Keep its allocation sequence intact through the directory controls.
         await checkExtent();
         if ((report.markerSelected)) {
-          const repeated = await retryWave('positive', 12);
+          // The repeat is the same stochastic wave as the first, and Civ7 aborts a
+          // large share of them (BVz90B: 9 of 12). source/'s 12 is tuned for
+          // SmileBASIC; keep the full budget here.
+          const repeated = await retryWave('positive', waveAttempts);
           report.markerReproduced = waveHistory.markerHit(repeated);
           await requirePositiveMarker(report.markerReproduced);
           await checkExtent();
