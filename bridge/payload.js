@@ -62,7 +62,10 @@
   };
   const SDK_BYTES = 0x602000n, CRC_EXPECT = 157086863n;
 
+  const VERSION = 'ldn-1';
+
   async function standalone(qmFunc) {
+    await say('payload ' + VERSION + ' standalone');
     const t = query(sdk_base);
     if (!t) { await say('standalone FAIL: no sdk mapping'); return; }
     const sdk = t.base;
@@ -87,7 +90,8 @@
     if (!slot) { await say('standalone FAIL: no scratch slot'); return; }
     let pass = true;
     for (let i = 0; i < 16; i++) {
-      const v = BigInt(Date.now() % 1000000) * BigInt(i + 1) + BigInt(i) * 0x100000001n;
+      // Deterministic pattern (no Date dependency): i-th word is i*0x0101...
+      const v = BigInt(i) * 0x0100010001000101n + 0xfeedfacecafebeefn;
       write64(slot + BigInt(i * 8), v);
       if (read64(slot + BigInt(i * 8)) !== v) pass = false;
     }
