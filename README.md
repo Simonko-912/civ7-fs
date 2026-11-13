@@ -10,6 +10,7 @@ FS is basically uneeded for y'all rn.
   <img width="1596" height="517" alt="{CABAC7F4-3984-4729-9DCC-9ADE09700AEE}" src="https://github.com/user-attachments/assets/db0548b1-444d-4c66-865d-792333ae6235" />
     - Do this everytime it fails (i do it every success too just to be save)
 - ``node engine/run.cjs 192.168.2.118``
+- Works with LDN-only setups: the listener binds the wildcard address and no longer waits on a Wi-Fi/LAN IP, so it comes up inside an LDN room without a normal network. Point the engine at the console's LDN IP.
 - Wait potentially up to 10 Minutes
 - Profit
 

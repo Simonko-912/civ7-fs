@@ -1263,22 +1263,14 @@
         }
 
         async function remote_js_loader() {
-            try { Network.resetNetworkCommunication(); } catch (e) {}
-
+            // LDN-compatible: the listener binds the wildcard address, so it does not depend on
+            // which interface answered first. get_current_ip() is a UDP probe that can stay null
+            // when only LDN is up, so the listener opens immediately and the IP is only used for
+            // the announcement line. Network.resetNetworkCommunication() is no longer called on
+            // startup (it can tear down an LDN room); it runs only after repeated setup failures.
             let setupFails = 0;
 
             while (true) {
-                let current_ip = get_current_ip();
-                let announced = false;
-                while (current_ip === null) {
-                    if (!announced) {
-                        await log("network down - waiting for network..");
-                        announced = true;
-                    }
-                    await sleep(2000);
-                    current_ip = get_current_ip();
-                }
-
                 let sock_fd;
                 try {
                     sock_fd = create_socket();
@@ -1293,7 +1285,14 @@
                     continue;
                 }
 
-                const network_str = current_ip + ":" + PORT;
+                // Brief grace so Wi-Fi/LAN boots still log a real address; LDN-only proceeds anyway.
+                let current_ip = get_current_ip();
+                for (let i = 0; i < 5 && current_ip === null; i++) {
+                    await sleep(1000);
+                    current_ip = get_current_ip();
+                }
+
+                const network_str = (current_ip === null ? "LDN-only" : current_ip) + ":" + PORT;
 
                 let acceptFails = 0;
                 let badConns = 0;
