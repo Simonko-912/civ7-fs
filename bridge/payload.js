@@ -60,9 +60,12 @@
     queryMemory: [0x168B0Cn, 'e10f1ff8c10000d4e20340f9410000b9ff430091c0035fd6'],
     crc32:   [0x72EB0n,  'e203022a5fcb1514'],
   };
-  const SDK_BYTES = 0x602000n, CRC_EXPECT = 157086863n;
+  const SDK_BYTES = 0x602000n;
+  // Accepted sdk-text CRCs per verified console/sdk build pair; qualify
+  // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
+  const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-3';
+  const VERSION = 'ldn-4';
 
   async function standalone(qmFunc) {
     await say('payload ' + VERSION + ' standalone');
@@ -96,8 +99,8 @@
         break;
       }
     const crc = call_rop(sdk + crcOff, 0n, sdk, SDK_BYTES, 0n);
-    if (crc !== CRC_EXPECT) {
-      await say('standalone FAIL: sdk crc ' + crc + ' expected ' + CRC_EXPECT + crcNote);
+    if (!CRC_OK.includes(crc)) {
+      await say('standalone FAIL: sdk crc ' + crc + ' not in [' + CRC_OK.join(', ') + ']' + crcNote);
       return;
     }
     await say('[s3] sdk crc32 ' + crc + crcNote);

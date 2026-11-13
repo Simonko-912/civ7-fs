@@ -30,7 +30,7 @@
   },
   "crc32": {
     "function": "crc32",
-    "expected": 157086863
+    "expected": [157086863, 3297870604]
   },
   "importRestoration": false,
   "sessionManager": {

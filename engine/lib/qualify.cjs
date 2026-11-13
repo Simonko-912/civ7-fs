@@ -17,8 +17,10 @@ async function qualify(native) {
     if (entry.bytes) await native.verifyFunction(a.sdk + entry.offset, Buffer.from(entry.bytes, 'hex'));
   }
   const crc = await native.call(crcEntry.offset, 0, a.sdk, target.sdkBytes);
-  check(crc.result === BigInt(required(target.crc32.expected, `${target.name} SDK CRC-32`)),
-    `${target.displayName} SDK checksum differs`);
+  const expectedCrcs = required(target.crc32.expected, `${target.name} SDK CRC-32`);
+  const accepted = (Array.isArray(expectedCrcs) ? expectedCrcs : [expectedCrcs]).map(BigInt);
+  check(accepted.includes(crc.result),
+    `${target.displayName} SDK checksum differs: ${crc.result} not in [${accepted.join(', ')}]`);
   const slot = a.scratch + 0x10000;
   const saved = await native.read(slot, 64);
   const marker = crypto.randomBytes(64);
