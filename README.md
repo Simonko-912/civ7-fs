@@ -25,6 +25,21 @@ Im too lazy for reddit responses, humour me.
   - ``Ask your LLM how to do this if you struggle to run https://github.com/byizmysh/IZCIVSwitch/blob/main/kit/save-tools/restore_save.py``
     - You can do this instantly after having a failed run e.g. dont restart instantly but run the Restore Save.
 
+# OunceCake-Civ7
+
+`ouncecake/` is a vendored, unmodified copy of
+[OunceCake-Civ7](https://github.com/HerXayah/OunceCake-Civ7) (GPL-2.0). It dumps
+unencrypted romFS/exeFS for a title by mounting it through `fsp-srv` and pulling files
+over FTP, and it runs on top of this repository's engine: give it a run folder.
+
+```
+node engine/run.cjs <console-ip>          # get to "held"
+cd ouncecake && node ouncecake.cjs /path/to/runs/switch2-<id>
+```
+
+See `ouncecake/VENDORED.md` for the artifacts it reads and the one caveat (its FTP
+deploy step writes into the mounted game image; listing and reading do not).
+
 # Credits
 
 [Gezine CIV7 XSS](https://github.com/Gezine/CivSwitch/tree/main)  
