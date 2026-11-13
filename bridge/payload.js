@@ -49,6 +49,61 @@
 
     VERBOSE: false,     // log a line every 1000 RPCs
   };
+
+  // ---- standalone chain (LDN-only: no PC to dial) --------------------
+  // Qualify the loader closure + SDK, dump the address map, and prove owned
+  // memory. Mirrors engine/lib/qualify.cjs + app/map.cjs inside the console
+  // eval so the Switch 1 only needs to deliver this file and read the log.
+  const ART = {
+    memcpy:  [0x5224E0n, 'ec0301cb8a0940924b000aeb69040054e90301aae80300aa6a0100b4e80301aae90300aacc0910374c0a08376c000036080140392801003908000a8b29000a8b'],
+    memmove: [0x522830n, '1f0001ebe00a00542800028b1f0100eb090300540900028b3f0101eba90200541f0001eb820200545f8000f1c3060054290840f2c00600540a01805228f17db2'],
+    queryMemory: [0x168B0Cn, 'e10f1ff8c10000d4e20340f9410000b9ff430091c0035fd6'],
+    crc32:   [0x72EB0n,  'e203022a5fcb1514'],
+  };
+  const SDK_BYTES = 0x602000n, CRC_EXPECT = 157086863n;
+
+  async function standalone(qmFunc) {
+    const t = query(sdk_base);
+    if (!t) { await say('standalone FAIL: no sdk mapping'); return; }
+    const sdk = t.base;
+    const ok = t.size === SDK_BYTES && t.type === 3 && t.perm === 5;
+    await say('[s1] sdk ' + hex(sdk) + ' size ' + hex(t.size) + ' type ' + t.type + ' perm ' + perms(t.perm) + (ok ? '' : '  MISMATCH'));
+    if (!ok) return;
+    for (const name of ['memcpy', 'memmove', 'queryMemory', 'crc32']) {
+      const [off, hexBytes] = ART[name];
+      const at = sdk + off;
+      for (let i = 0; i < hexBytes.length; i += 2)
+        if (read8(at + BigInt(i)) !== BigInt(parseInt(hexBytes.substr(i, 2), 16))) {
+          await say('standalone FAIL: ' + name + ' bytes differ at +' + i);
+          return;
+        }
+      await say('[s2] ' + name + ' verified at sdk+' + hex(off));
+    }
+    const crc = call_rop(sdk + ART.crc32[0], 0n, sdk, SDK_BYTES, 0n);
+    if (crc !== CRC_EXPECT) { await say('standalone FAIL: sdk crc ' + crc); return; }
+    await say('[s3] sdk crc32 ' + crc);
+    // Owned-memory challenge in the loader scratch, restored afterwards.
+    const slot = malloc(0x100n);
+    if (!slot) { await say('standalone FAIL: no scratch slot'); return; }
+    let pass = true;
+    for (let i = 0; i < 16; i++) {
+      const v = BigInt(Date.now() % 1000000) * BigInt(i + 1) + BigInt(i) * 0x100000001n;
+      write64(slot + BigInt(i * 8), v);
+      if (read64(slot + BigInt(i * 8)) !== v) pass = false;
+    }
+    free(slot);
+    if (!pass) { await say('standalone FAIL: memory challenge'); return; }
+    await say('[s4] owned-memory challenge ok');
+    // Address-map walk: one query per region, bounded like app/map.cjs.
+    let at2 = 0n, regions = 0;
+    while (at2 < (1n << 39n) && regions < 4096) {
+      const r = query(at2);
+      if (!r || r.size === 0n) break;
+      at2 = r.base + r.size; regions++;
+    }
+    await say('[s5] map walk: ' + regions + ' regions, end ' + hex(at2));
+    await say('standalone chain PASS');
+  }
   // ================================================================
 
   const SCRATCH_BYTES   = 0x80000n;
@@ -166,19 +221,17 @@
                 (t.perm & 4 ? '' : '  WARNING: not executable'));
     }
 
-    // ---- 5. connect out to the PC ----
-    let pcIp = CONFIG.PC_IP;
-    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(pcIp)) {
-      // LDN/manual flow: the delivering host is also our RPC peer. The loader
-      // kept the accepted client address in its closure sockaddr_in.
-      try {
-        if (typeof sockaddr_in !== 'undefined' && typeof read8 === 'function') {
-          const a = Number(read8(sockaddr_in + 4n)), b = Number(read8(sockaddr_in + 5n));
-          const c = Number(read8(sockaddr_in + 6n)), d = Number(read8(sockaddr_in + 7n));
-          if (a || b || c || d) pcIp = a + '.' + b + '.' + c + '.' + d;
-        }
-      } catch (_) {/* fall through to the explicit-address error */}
+    // ---- 5. PC endpoint ----
+    // An injected/static IPv4 means the PC engine drives the RPC loop. With
+    // the placeholder still in place (LDN-only: the Switch 1 delivers this
+    // file and only reads log lines), run the whole chain inside the eval.
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(CONFIG.PC_IP)) {
+      await say('no PC configured - running standalone over LDN delivery');
+      await standalone(qmFunc);
+      await say(rule);
+      return;
     }
+    let pcIp = CONFIG.PC_IP;
     const ipParts = String(pcIp).split('.').map(Number);
     if (ipParts.length !== 4 || ipParts.some(v => !Number.isInteger(v) || v < 0 || v > 255)) {
       await say('[4/5] FAILED: bad PC_IP "' + CONFIG.PC_IP + '"'); return;
