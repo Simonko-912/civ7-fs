@@ -62,7 +62,7 @@
   };
   const SDK_BYTES = 0x602000n, CRC_EXPECT = 157086863n;
 
-  const VERSION = 'ldn-1';
+  const VERSION = 'ldn-2';
 
   async function standalone(qmFunc) {
     await say('payload ' + VERSION + ' standalone');
@@ -75,11 +75,14 @@
     for (const name of ['memcpy', 'memmove', 'queryMemory', 'crc32']) {
       const [off, hexBytes] = ART[name];
       const at = sdk + off;
-      for (let i = 0; i < hexBytes.length; i += 2)
-        if (read8(at + BigInt(i)) !== BigInt(parseInt(hexBytes.substr(i, 2), 16))) {
-          await say('standalone FAIL: ' + name + ' bytes differ at +' + i);
+      for (let j = 0; j * 2 < hexBytes.length; j++) {
+        const expected = BigInt(parseInt(hexBytes.substr(j * 2, 2), 16));
+        if (read8(at + BigInt(j)) !== expected) {
+          await say('standalone FAIL: ' + name + ' byte ' + j + ' expected '
+            + hexBytes.substr(j * 2, 2) + ' got ' + Number(read8(at + BigInt(j))).toString(16));
           return;
         }
+      }
       await say('[s2] ' + name + ' verified at sdk+' + hex(off));
     }
     const crc = call_rop(sdk + ART.crc32[0], 0n, sdk, SDK_BYTES, 0n);
