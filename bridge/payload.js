@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-4';
+  const VERSION = 'ldn-5';
 
   async function standalone(qmFunc) {
     await say('payload ' + VERSION + ' standalone');
@@ -110,7 +110,12 @@
     let pass = true;
     for (let i = 0; i < 16; i++) {
       // Deterministic pattern (no Date dependency): i-th word is i*0x0101...
-      const v = BigInt(i) * 0x0100010001000101n + 0xfeedfacecafebeefn;
+      // Mask to 64 bits: the storage path (BigUint64Array/setBigUint64) wraps
+      // modulo 2^64, so compare against the same wrapped value the hardware
+      // keeps. Without the mask every word from i>=2 differs only by the
+      // dropped carry — a false FAIL, first seen on hardware.
+      const v = (BigInt(i) * 0x0100010001000101n + 0xfeedfacecafebeefn)
+        & 0xffffffffffffffffn;
       write64(slot + BigInt(i * 8), v);
       if (read64(slot + BigInt(i * 8)) !== v) pass = false;
     }
