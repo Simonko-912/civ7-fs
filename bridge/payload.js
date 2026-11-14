@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-21';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-22';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -330,27 +330,22 @@
         await say('[f4] clone ' + (fsH || ('failed ' + (cr ? cr.result : 'x'))));
         if (fsH) {
           handles.push(fsH);
-          // Clone answered on mount.handle and the clone handle came back,
-          // but three plain shapes on the clone went untouched. The mount
-          // session answers control frames; its data frames likely need the
-          // domain wrap to the mount object (same shape OpenStorage proved
-          // on our own session). Try: wrapped-on-mount-session first, then
-          // plain-on-mount-session, then plain-on-clone.
+          // e-wrapped ANSWERED (result 7) while plain shapes were echoed
+          // untouched — wrapped-on-mount-session is the accepted framing.
+          // Result 7 on an inline-path GetEntryType is the payload being
+          // wrong, not the framing: the reference passes the path via the X
+          // descriptor, inline input empty. Now: wrapped + X-desc first.
           const objIdN = Number(mount.objId);
-          let entry = await xfer('e-wrapped',
-            domainPacket(objIdN, 7, [47, 0], {}), mount.handle, true);
-          if (!entry)
-            entry = await xfer('e-plain-session',
-              buildPacket(7, [47, 0], {}), mount.handle);
-          if (!entry) {
-            const pk = Number((2n << 16n) | ((pathB >> 36n) & 7n) << 6n |
-              ((pathB >> 32n) & 15n) << 12n);
-            entry = await xfer('e-plain-clone',
-              [...le32((4 | (1 << 16)) >>> 0), ...le32(8), ...le32(pk),
-                ...le32(Number(pathB & 0xffffffffn)),
-                83, 70, 67, 73, ...new Array(4).fill(0), ...le32(7),
-                ...new Array(4).fill(0)], fsH);
-          }
+          let entry = await xfer('e-w-x2',
+            domainPacket(objIdN, 7, [],
+              {send: [{address: pathB, size: 2}]}), mount.handle, true);
+          if (!entry || entry.result !== 0)
+            entry = await xfer('e-w-x301',
+              domainPacket(objIdN, 7, [],
+                {send: [{address: pathB, size: 0x301}]}), mount.handle, true) || entry;
+          if (!entry || entry.result !== 0)
+            entry = await xfer('e-w-inl',
+              domainPacket(objIdN, 7, [47, 0], {}), mount.handle, true) || entry;
           rooted = entry ? entry.result : 0xffffffff;
           await say('[f5] rooted entry ' + rooted +
             (entry && rooted === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
