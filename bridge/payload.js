@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-7';
+  const VERSION = 'ldn-8';
 
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
@@ -318,11 +318,14 @@
         break;
       }
     const crc = call_rop(sdk + crcOff, 0n, sdk, SDK_BYTES, 0n);
-    if (!CRC_OK.includes(crc)) {
-      await say('standalone FAIL: sdk crc ' + crc + ' not in [' + CRC_OK.join(', ') + ']' + crcNote);
-      return;
-    }
-    await say('[s3] sdk crc32 ' + crc + crcNote);
+    // The crc covers the whole mapped text, including a handful of boot-time
+    // fixup bytes (the thunk byte-0 diff is one of them). Those drift between
+    // boots on the SAME firmware — hardware saw 3297870604 then 3297885964
+    // with no update in between. So the crc is advisory: mismatch logs and
+    // continues, the byte-verifies above are the real identity gate.
+    if (!CRC_OK.includes(crc))
+      await say('[s3] sdk crc32 ' + crc + ' (new fingerprint, boot-drift or new build)' + crcNote);
+    else await say('[s3] sdk crc32 ' + crc + crcNote);
     // Owned-memory challenge in the loader scratch, restored afterwards.
     const slot = malloc(0x100n);
     if (!slot) { await say('standalone FAIL: no scratch slot'); return; }
