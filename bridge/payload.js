@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-26';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-27';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -227,7 +227,7 @@
         }
     }
     await say('[fs] sdk helpers verified');
-    const w = malloc(0x800);
+    const w = malloc(0x1000);
     if (!w) { await say('fs FAIL: no work buffer'); return; }
     const pkt = BigInt(w), svc = BigInt(w) + 0x100n, pathB = BigInt(w) + 0x200n;
     const handles = [];
@@ -353,11 +353,40 @@
               {send: [{address: pathB, size: 2}]}), mount.handle, true);
           rooted = entry ? entry.result : 0xffffffff;
           if (entry && rooted === 0) {
-            // dataAt can sit past word 16 when the domain header is found at
-            // byte 32 (data starts at +64); a 64-byte window returned
-            // undefined -> NaN. Read a window that covers the out-data.
             const d = getBytes(pkt, 128);
             await say('[f5] rooted entry 0 type ' + u32(d, entry.dataAt));
+            // Entry ok -> continue the chain (reference ipcListDirectory):
+            // OpenDirectory('/') cmd 9, mode 3 inline + X desc path at full
+            // size 0x301, same proven domain wrap. Then ReadDirectory: plain
+            // SFCI cmd 0 + B descriptor on the returned handle, like the
+            // reference sendIPC(dirHandle, readBuf). Entry record: name at
+            // +0, type byte +0x304, size u32 +0x308, stride 0x310.
+            const od = await xfer('od', domainPacket(objIdN, 9, le32(3),
+              {send: [{address: pathB, size: 0x301}]}), mount.handle, true);
+            if (!od || od.result !== 0) {
+              await say('[f6] dir open res ' + (od ? od.result : 'x'));
+            } else {
+              const dirH = od.moves[0] || od.objects[0] || od.copies[0];
+              await say('[f6] dir handle ' + dirH);
+              if (dirH) {
+                const outBuf = W + 0x800n;
+                putBytes(outBuf, new Array(0x620).fill(0));
+                const rd = await xfer('rd',
+                  buildPacket(0, [], {recv: [{address: outBuf, size: 0x620}]}), dirH);
+                if (!rd || rd.result !== 0) {
+                  await say('[f7] dir read res ' + (rd ? rd.result : 'x'));
+                } else {
+                  const rw = getBytes(pkt, 64);
+                  const count = u32(rw, rd.dataAt);
+                  await say('[f7] dir entries ' + Math.min(count, 2));
+                  const e0 = getBytes(outBuf, 0x310);
+                  let nm = '';
+                  for (let i = 0; i < 64 && e0[i]; i++) nm += String.fromCharCode(e0[i]);
+                  await say('[f7] first "' + nm + '" type ' + e0[0x304] + ' size ' + u32(e0, 0x308));
+                }
+                try { call_rop(sdk + FSF.close[0], BigInt(dirH), 0n, 0n, 0n); } catch (_) {}
+              }
+            }
             await say('fs chain PASS');
             return;
           }
