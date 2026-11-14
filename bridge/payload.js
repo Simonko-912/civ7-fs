@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-25';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-26';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -353,7 +353,10 @@
               {send: [{address: pathB, size: 2}]}), mount.handle, true);
           rooted = entry ? entry.result : 0xffffffff;
           if (entry && rooted === 0) {
-            const d = getBytes(pkt, 64);
+            // dataAt can sit past word 16 when the domain header is found at
+            // byte 32 (data starts at +64); a 64-byte window returned
+            // undefined -> NaN. Read a window that covers the out-data.
+            const d = getBytes(pkt, 128);
             await say('[f5] rooted entry 0 type ' + u32(d, entry.dataAt));
             await say('fs chain PASS');
             return;
