@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-15';
+  const VERSION = 'ldn-16';
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
@@ -283,38 +283,34 @@
         await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
       } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
 
-      // OpenBisFileSystem(31 = SYSTEM) + GetEntryType('/') on the rooted handle:
-      // the compact descriptor form from fs-root-control.pathRequest:
-      // word0 = 4 | (1<<16) (one in-desc), descriptor words at offsets 8/12
-      // (packed size/address-high bits, address low 32).
-      // Engine probe: bis input buffer is zero-filled, '/' is only written
-      // before the GetEntryType step.
+      // Compact path request, exact engine pathRequest()/reference
+      // writeXDesc layout: numA=1 header, 8-byte A descriptor at +8
+      // (packed size/high-address bits, address low), then RAW data
+      // straight at +16 — SFCI magic, zero, cmd, zero, input. No 12-byte
+      // descriptors, no alignment padding; that padding is why earlier
+      // plain frames went unanswered (svc computes the data offset from
+      // the descriptor counts and found no magic there).
       putBytes(pathB, new Array(0x301).fill(0));
       const pathPacket = (cmd, inp) => {
-        const b = buildPacket(cmd, inp, {});
+        const len = (inp || []).length;
         const packed = Number((0x301n << 16n) | ((pathB >> 36n) & 7n) << 6n |
           ((pathB >> 32n) & 15n) << 12n);
-        const w0 = le32((4 | (1 << 16)) >>> 0), pw = le32(packed),
-          aw = le32(Number(pathB & 0xffffffffn));
-        for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
-        return b;
+        return [...le32((4 | (1 << 16)) >>> 0),
+          ...le32(Math.ceil((32 + len) / 4)),
+          ...le32(packed),
+          ...le32(Number(pathB & 0xffffffffn)),
+          83, 70, 67, 73, 0, 0, 0, 0,
+          ...le32(cmd >>> 0), 0, 0, 0, 0].concat(inp || []);
       };
-      // Reference-flow (ItsNerisma/CivSwitchFS): first thing after
-      // ConvertToDomain, clone the root domain object with Control cmd 1
-      // (CopyFromCurrentDomain) into an ORDINARY handle — everything after
-      // that is plain compact frames on real handles, no domain wraps.
-      const cloned = await xfer('clone', controlPacket(1, le32(root), 0), fsp);
-      const fsRoot = cloned && cloned.result === 0 &&
-        (cloned.moves[0] || cloned.copies[0] || cloned.objects[0]);
-      await say('[f3b] root clone ' + (fsRoot || ('skipped (' + (cloned ? cloned.result : 'x') + ')')));
-      const bisTarget = fsRoot || root;
-      if (fsRoot) handles.push(fsRoot);
+      // Engine order: BIS probe + GetEntryType are plain compact frames on
+      // the session handle; the domain wrap only serves OpenStorage. '/' is
+      // written before GetEntryType only, the bis buffer stays zero-filled.
       let bis = null, bisId = 0;
       for (const id of [31, 30]) {
-        bis = fsRoot
-          ? await xfer('bis', pathPacket(11, le32(id)), fsRoot)
-          : await xfer('bis', domainPacket(root, 11, le32(id),
-              {send: [{address: pathB, size: 0x301}]}), fsp, true);
+        bis = await xfer('bis', pathPacket(11, le32(id)), fsp);
+        if (bis && bis.missing)
+          bis = await xfer('bis', domainPacket(root, 11, le32(id),
+            {send: [{address: pathB, size: 0x301}]}), fsp, true);
         if (bis && bis.result === 0) { bisId = id; break; }
       }
       if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
@@ -322,8 +318,7 @@
       const bisObject = bis.moves[0] || bis.objects[0] || bis.copies[0];
       if (!bisObject) { await say('fs FAIL: BIS handle not returned'); return; }
       handles.push(bisObject);
-      // BIS open returns a moved ordinary handle: GetEntryType('/') rides it
-      // as a plain compact frame (reference ipcGetEntryType).
+      // GetEntryType('/') rides the returned moved handle, same compact form.
       const entry = await xfer('entry', pathPacket(7, []), bisObject);
       await say('[f5] BIS ' + bisId + ' rooted, entry ' + (entry ? entry.result : 'x') +
         (entry && entry.result === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
