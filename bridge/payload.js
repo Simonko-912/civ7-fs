@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-24';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-25';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -193,10 +193,19 @@
     // zero-object result is valid too, so a caller-side hint covers the
     // count==0 case where the magic heuristic cannot see it.
     if (b[at] === 1 || domainExpected) {
-      const count = u32(b, at), result = u32(b, at + 24);
+      // Domain reply header can sit past padding the strict walk misses: the
+      // corrected ldn-23 dump has count=01 at byte 32 while the walk from the
+      // reply header lands at byte 16. Reference decode_ipc_response uses an
+      // aligned_start and treats first_word<256 as the object count; do the
+      // same scan and take the first plausible header. Result at h+24,
+      // out-object ids after the reply data at h+32+dataSize.
+      let h = at;
+      for (let p = at; p + 28 <= Math.min(b.length, 96); p += 4)
+        if ((u32(b, p) >>> 0) < 256) { h = p; break; }
+      const count = u32(b, h), result = u32(b, h + 24);
       const objects = [];
-      if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, at + 32 + u32(b, at + 8) + 4 * i));
-      return {result, objects, moves, copies, dataAt: at + 32};
+      if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, h + 32 + u32(b, h + 8) + 4 * i));
+      return {result, objects, moves, copies, dataAt: h + 32};
     }
     if (!(b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79)) {
       const scan = findMagic(b, at);
@@ -343,14 +352,14 @@
             domainPacket(objIdN, 7, [],
               {send: [{address: pathB, size: 2}]}), mount.handle, true);
           rooted = entry ? entry.result : 0xffffffff;
-          const d = getBytes(pkt, 48);
-          await say('[f5] entry answered res ' + rooted + ' words '
-            + u32(d, 32) + '/' + u32(d, 36) + '/' + u32(d, 40) + '/' + u32(d, 44));
-          if (entry && rooted !== 0xffffffff) {
+          if (entry && rooted === 0) {
+            const d = getBytes(pkt, 64);
+            await say('[f5] rooted entry 0 type ' + u32(d, entry.dataAt));
             await say('fs chain PASS');
             return;
           }
-          if (rooted === 0) {
+          await say('[f5] entry answered res ' + rooted);
+          if (entry && rooted !== 0xffffffff) {
             await say('fs chain PASS');
             return;
           }
