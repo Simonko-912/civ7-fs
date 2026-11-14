@@ -770,8 +770,11 @@ async function main() {
       await save();
       const markers = [...new Set(report.cases.slice(batch.firstCaseIndex).map(heapMarker).filter(Number.isInteger))];
       throw Error('Positive canary verification failed: ' + waveHistory.describe(batch) +
+        // The marker is a hint about the save heap, not a gate: winning boots have
+        // been observed at 0x4000, 0x48000 and 0xa4000 on this console. 0x4000 is
+        // the SmileBASIC reference value, so do not read it as 'clean'.
         (markers.length ? '; save-heap marker ' + markers.join('/') +
-          ' (a clean boot reports 16384)' : '') +
+          ' (0x4000 is the SmileBASIC reference, not a gate)' : '') +
         (report.placementUncertain ? '; retain resources for recovery' : '; no qualified marker'));
     }
     async function checkExtent() {

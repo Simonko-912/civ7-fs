@@ -24,10 +24,31 @@ function canRetry(report, session, exited) {
   return report?.retryable !== false && hasProvenCleanup(report, session, exited);
 }
 
+// 'cleanup is unproven' is the least actionable message in the chain: name the
+// predicate that failed so the operator knows what to reboot for.
+function cleanupGaps(report, session, exited) {
+  const retained = report?.retained;
+  const gaps = [];
+  if (exited?.signal != null || !Number.isInteger(exited?.code)) gaps.push('probe exit not clean');
+  if (report?.session !== session) gaps.push('report belongs to another session');
+  if (report?.cleanedUp !== true) gaps.push('cleanedUp not reported');
+  if (report?.placementUncertain) gaps.push('placementUncertain');
+  if (report?.cleanupError) gaps.push('cleanupError');
+  if (failureSummary(report).retainResources) gaps.push('retainResources');
+  if (report?.memoryControl?.ready) gaps.push('endpoint still ready');
+  if (report?.memoryControl?.pending || report?.retainedMemory?.pending) gaps.push('request pending');
+  if (retained?.cacheNeedsRestore) gaps.push('cache needs restore');
+  if (retained?.base !== 0) gaps.push('retained base ' + (retained?.base ?? 'absent'));
+  if (!Array.isArray(retained?.handles) || retained.handles.length) gaps.push('handles open');
+  if (!Array.isArray(retained?.threads) || retained.threads.length) gaps.push('threads open');
+  return gaps;
+}
+
 // The acquisition owns native allocations until retire() completes.
 async function start() {
-  // A new probe is permitted only after the previous owner proves cleanup.
-  const MAX_ATTEMPTS = 3;
+  // A new probe is permitted only after the previous owner proves cleanup. Each
+  // attempt is a whole race on a fresh worker set, so space them out.
+  const MAX_ATTEMPTS = 5;
   let lastError;
   const attempts = [];
   const supervisorReport = path.join(__dirname, 'acquisition-supervisor.json');
@@ -42,7 +63,7 @@ async function start() {
     const child = spawn(process.execPath, [path.join(__dirname, 'memory/probe-reserved-gap.cjs')],
       { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false });
-    let reportFile, exited, spawnError;
+    let reportFile, exited, spawnError, lastLine = '';
     child.once('error', error => { spawnError = error; });
     let logError;
     log.on('error', error => { logError = error; child.kill('SIGKILL'); });
@@ -53,6 +74,7 @@ async function start() {
     }));
     const lines = readline.createInterface({ input: child.stdout });
     lines.on('line', line => {
+      if (line.trim()) lastLine = line.trim();
       let row;
       try { row = JSON.parse(line); } catch { return; }
       if (row.stage === 'connected') reportFile = row.file;
@@ -77,9 +99,12 @@ async function start() {
         if (exited || spawnError || Date.now() >= deadline) {
           // The probe stores a stack string, so its first line already reads
           // 'Error: ...'. Strip that prefix or every caller prints 'Error: Error: ...'.
-          const reported = report?.error?.split('\n')[0].replace(/^Error:\s*/, '');
-          throw Error(spawnError?.message || logError?.message || reported ||
-            'FS acquisition exited or timed out before memory was ready');
+          const reported = report?.error?.split('\n')[0].replace(/^Error:\s*/, '')
+            || (lastLine ? 'probe said: ' + lastLine : '');
+          const gaps = exited || spawnError ? cleanupGaps(report, a.session, exited) : [];
+          throw Error((spawnError?.message || logError?.message || reported ||
+            'FS acquisition exited or timed out before memory was ready') +
+            (gaps.length ? ' [' + gaps.join(', ') + ']' : ''));
         }
         await delay(500);
       }
@@ -142,7 +167,7 @@ async function start() {
           : '; cleanup is unproven or placement is uncertain; restart the console before another launch.'));
       if (!retry) throw lastError;
     }
-    if (attempt < MAX_ATTEMPTS - 1) await delay(1000);
+    if (attempt < MAX_ATTEMPTS - 1) await delay(1000 * 2 ** attempt);
   }
   throw lastError;
 }
