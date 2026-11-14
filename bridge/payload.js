@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-11';
+  const VERSION = 'ldn-12';
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
@@ -288,11 +288,12 @@
         for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
         return b;
       };
-      // Engine-faithful (fs-root-control root-probe-bis-filesystem): BIS open +
-      // GetEntryType ride the session handle with plain compact pathRequest
-      // framing (no domain wrap), handle out of the moves list like
-      // domain.oneHandle — matches the engine's domain.send(root-handle, ...).
-      const bis = await xfer('bis', pathPacket(11, le32(31)), fsp);
+      // Engine-faithful combo (fs-root-control root-probe-bis-filesystem):
+      // plain compact pathRequest frames are addressed to the domain ROOT
+      // OBJECT ID (not the session handle); the OpenStorage/domain-wrapped
+      // form above stays on the session handle. Handle comes back in the
+      // moves list (domain.oneHandle), GetEntryType then rides that handle.
+      const bis = await xfer('bis', pathPacket(11, le32(31)), root);
       if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
       const bisHandle = bis.moves[0] || bis.objects[0] || bis.copies[0];
       if (!bisHandle) { await say('fs FAIL: BIS handle not returned'); return; }
