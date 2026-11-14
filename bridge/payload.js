@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-10';
+  const VERSION = 'ldn-11';
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
@@ -288,17 +288,18 @@
         for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
         return b;
       };
-      const bis = await xfer('bis', domainPacket(root, 11, le32(31),
-        {send: [{address: pathB, size: 0x301}]}), fsp, true);
+      // Engine-faithful (fs-root-control root-probe-bis-filesystem): BIS open +
+      // GetEntryType ride the session handle with plain compact pathRequest
+      // framing (no domain wrap), handle out of the moves list like
+      // domain.oneHandle — matches the engine's domain.send(root-handle, ...).
+      const bis = await xfer('bis', pathPacket(11, le32(31)), fsp);
       if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
-      const bisHandle = bis.objects[0] || bis.moves[0] || bis.copies[0];
+      const bisHandle = bis.moves[0] || bis.objects[0] || bis.copies[0];
       if (!bisHandle) { await say('fs FAIL: BIS handle not returned'); return; }
       handles.push(bisHandle);
-      // GetEntryType('/') on the BIS object: inline '/' at pathB plus the
-      // same in-descriptor the engine's pathRequest packs.
-      const entry = await xfer('entry', domainPacket(bisHandle, 7, [],
-        {send: [{address: pathB, size: 0x301}]}), fsp, true);
-      await say('[f5] BIS SYSTEM rooted, entry ' + (entry ? entry.result : 'x'));
+      const entry = await xfer('entry', pathPacket(7, []), bisHandle);
+      await say('[f5] BIS SYSTEM rooted, entry ' + (entry ? entry.result : 'x') +
+        (entry && entry.result === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
       await say('fs chain PASS');
     } finally {
       for (const h of handles.reverse()) {
