@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-8';
+  const VERSION = 'ldn-9';
 
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
@@ -219,13 +219,18 @@
       const xfer = async (label, bytes, handle) => {
         putBytes(pkt, bytes.concat(new Array(256 - bytes.length).fill(0)));
         // svcSendSyncRequest returns the input-header pointer on this sdk
-        // build (hardware: 0x1b0ea9200 = scratch+0x200, matching the packed
-        // BIS descriptor), where other builds return 0. Either is fine for
-        // the transport; the parsed reply decides. Only a missing SFCO
-        // section is a real failure.
+        // build; other builds return 0. Either is fine for the transport;
+        // the parsed reply decides. Only a missing SFCO section is a real
+        // failure, and then the raw head of the reply area says why.
         const sent = call_rop(sdk + FSF.send[0], pkt, 4096n, BigInt(handle), 0n);
-        const reply = parseReply(getBytes(pkt, 256));
-        if (reply.missing) { await say('fs FAIL: ' + label + ' transport ' + sent); return null; }
+        const raw = getBytes(pkt, 256);
+        const reply = parseReply(raw);
+        if (reply.missing) {
+          let hx = '';
+          for (let i = 0; i < 24; i++) hx += raw[i].toString(16).padStart(2, '0') + ' ';
+          await say('fs FAIL: ' + label + ' transport ' + sent + ' reply[' + hx.trim() + ']');
+          return null;
+        }
         if (sent !== 0n && !(xfer.note || (xfer.note = true)))
           await say('note: send returns ' + hex(sent) + ' (input pointer), reply parsed anyway');
         return reply;
@@ -247,7 +252,10 @@
       if (!stor || stor.result !== 0 || !stor.objects.length) {
         await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
       }
-      const storHandle = stor.moves[0] || stor.copies[0];
+      // Domain OpenStorage returns the storage as a domain OBJECT id; the
+      // plain-handle forms arrive via moves/copies. Accept any of them,
+      // same priority as domain.cjs openStorage.
+      const storHandle = stor.objects[0] || stor.moves[0] || stor.copies[0];
       if (storHandle) handles.push(storHandle);
       if (storHandle) {
         const size = await xfer('size', buildPacket(4, [], {}), storHandle);
