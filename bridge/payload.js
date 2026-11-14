@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-19';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-20';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -282,7 +282,7 @@
           return null;
         }
         const r = u32(getBytes(pkt, 64), dom.dataAt);
-        await say('[f3] domain root ' + r);
+        await say('[f6] domain root ' + r);
         return r;
       };
       // Both framings get their answer shape from the dumps now: plain
@@ -311,7 +311,7 @@
         mount = {handle: BigInt(read32(slots)), objId: objId, name: nm};
         break;
       }
-      await say('[f4] mount ' + (mount ? mount.name + ' session ' + mount.handle + ' obj ' + mount.objId : 'not found'));
+      await say('[f3] mount ' + (mount ? mount.name + ' session ' + mount.handle + ' obj ' + mount.objId : 'not found'));
 
       let rooted = 0xffffffff, domRoot = null;
       if (mount) {
@@ -327,17 +327,24 @@
           mount.handle);
         const fsH = cr && cr.result === 0 &&
           (cr.moves[0] || cr.objects[0] || cr.copies[0]);
-        await say('[f5] clone ' + (fsH || ('failed ' + (cr ? cr.result : 'x'))));
+        await say('[f4] clone ' + (fsH || ('failed ' + (cr ? cr.result : 'x'))));
         if (fsH) {
           handles.push(fsH);
-          // Reference ipcGetEntryType: X desc size len+1=2, word1=8, cmd 7.
+          // The clone frame (no descriptors, raw at +16) answered on this
+          // handle; the reference X-desc frame was left untouched. Walk the
+          // plausible shapes in order, first written reply wins.
           const pk = Number((2n << 16n) | ((pathB >> 36n) & 7n) << 6n |
             ((pathB >> 32n) & 15n) << 12n);
-          const entry = await xfer('entry',
+          let entry = await xfer('e-xdesc',
             [...le32((4 | (1 << 16)) >>> 0), ...le32(8), ...le32(pk),
               ...le32(Number(pathB & 0xffffffffn)),
               83, 70, 67, 73, ...new Array(4).fill(0), ...le32(7),
               ...new Array(4).fill(0)], fsH);
+          if (!entry)
+            entry = await xfer('e-inline', buildPacket(7, [47, 0], {}), fsH);
+          if (!entry)
+            entry = await xfer('e-desc-inline',
+              buildPacket(7, [47, 0], {send: [{address: pathB, size: 2}]}), fsH);
           rooted = entry ? entry.result : 0xffffffff;
           await say('[f5] rooted entry ' + rooted +
             (entry && rooted === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
@@ -363,12 +370,12 @@
         await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
       }
       const storObject = stor.objects[0];
-      await say('[f4] storage object ' + storObject);
+      await say('[f7] storage object ' + storObject);
       const size = await xfer('size', domainPacket(storObject, 4, [], {}), fsp, true);
       if (size && size.result === 0) {
         const d = getBytes(pkt, 64);
-        await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
-      } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
+        await say('[f7] storage size ' + BigInt(u32(d, size.dataAt)));
+      } else await say('[f7] storage size skipped (' + (size ? size.result : 'x') + ')');
       await say('fs chain PASS');
       // rooted is reported inside the [f5] lines above.
     } finally {
