@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-17';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-18';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -285,40 +285,74 @@
         await say('[f3] domain root ' + r);
         return r;
       };
-      // Engine order (fs-root-control): the BIS probe + GetEntryType run as
-      // plain compact frames while the session is still NON-domain. Once
-      // ConvertCurrentObjectToDomain flipped the session, plain frames were
-      // left untouched in every hardware dump while domain-wrapped ones
-      // answered — so walk BIS first with plain frames, convert afterwards
-      // for the storage stages. Bis ids: SYSTEM 31, then USER 30.
-      let bis = null, bisId = 0;
-      for (const id of [31, 30]) {
-        bis = await xfer('bis', pathPacket(11, le32(id)), fsp);
-        if (bis && bis.result === 0) { bisId = id; break; }
+      // Both framings get their answer shape from the dumps now: plain
+      // frames on the SESSION handle are always left untouched (every run),
+      // domain-wrapped frames answer. Reference flow: clone a mount-table
+      // object into an ORDINARY handle and plain frames work on that.
+      // '/' goes into the path buffer up-front — an empty buffer made BIS
+      // answer 11 (PathNotFound), which is not an id problem at all.
+      putBytes(pathB, [47, ...new Array(0x300).fill(0)]);
+      const W = BigInt(w);
+      const outA = W + 0x520n, nameB = W + 0x600n;
+      const rd64 = (a) => BigInt(read32(a)) + BigInt(read32(a + 4n)) * 4294967296n;
+      let mount = null;
+      for (const nm of ['save', 'SYSTEM:']) {
+        putBytes(outA, new Array(8).fill(0));
+        const nb = [];
+        for (let i = 0; i < nm.length; i++) nb.push(nm.charCodeAt(i));
+        putBytes(nameB, nb.concat([0]));
+        if (call_rop(sdk + 0xaaf10n, outA, nameB, 0n, 0n) !== 0n) continue;
+        const a = rd64(outA);
+        if (!a) continue;
+        const impl = rd64(a + 0x28n);
+        const service = rd64(impl + 0x10n);
+        const objId = BigInt(read32(service + 0x18n));
+        const slots = rd64(rd64(service + 0x10n) + 0x10n);
+        mount = {handle: BigInt(read32(slots)), objId: objId, name: nm};
+        break;
       }
-      let root = null;
-      if (!bis || bis.result !== 0) {
-        root = await toDomain();
+      await say('[f4] mount ' + (mount ? mount.name + ' session ' + mount.handle + ' obj ' + mount.objId : 'not found'));
+
+      let rooted = 0xffffffff;
+      if (mount) {
+        // Reference cloneObject: Control word0=5, cmd 1, object id at +32.
+        const cr = await xfer('clone',
+          [...le32(5), ...le32(9), ...new Array(6).fill(0),
+            83, 70, 67, 73, ...new Array(4).fill(0), ...le32(1),
+            ...new Array(4).fill(0), ...le32(Number(mount.objId))],
+          mount.handle);
+        const fsH = cr && cr.result === 0 &&
+          (cr.moves[0] || cr.objects[0] || cr.copies[0]);
+        await say('[f5] clone ' + (fsH || ('failed ' + (cr ? cr.result : 'x'))));
+        if (fsH) {
+          handles.push(fsH);
+          // Reference ipcGetEntryType: X desc size len+1=2, word1=8, cmd 7.
+          const pk = Number((2n << 16n) | ((pathB >> 36n) & 7n) << 6n |
+            ((pathB >> 32n) & 15n) << 12n);
+          const entry = await xfer('entry',
+            [...le32((4 | (1 << 16)) >>> 0), ...le32(8), ...le32(pk),
+              ...le32(Number(pathB & 0xffffffffn)),
+              83, 70, 67, 73, ...new Array(4).fill(0), ...le32(7),
+              ...new Array(4).fill(0)], fsH);
+          rooted = entry ? entry.result : 0xffffffff;
+          await say('[f5] rooted entry ' + rooted +
+            (entry && rooted === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
+        }
+      }
+      if (rooted !== 0) {
+        // Mount-table route unavailable/blocked: BIS over the proven domain
+        // wrap. The path buffer now holds '/' before the open (result 11
+        // was PathNotFound on the zero-filled buffer, for both ids).
+        const root = await toDomain();
         if (!root) return;
+        let bis = null;
         for (const id of [31, 30]) {
           bis = await xfer('bis', domainPacket(root, 11, le32(id),
             {send: [{address: pathB, size: 0x301}]}), fsp, true);
-          if (bis && bis.result === 0) { bisId = id; break; }
+          if (bis && bis.result === 0) { rooted = 0; break; }
         }
+        await say('[f5] BIS open result ' + (bis ? bis.result : 'x'));
       }
-      if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
-      putBytes(pathB, [47, ...new Array(0x300).fill(0)]);
-      const bisObject = bis.moves[0] || bis.objects[0] || bis.copies[0];
-      if (!bisObject) { await say('fs FAIL: BIS handle not returned'); return; }
-      handles.push(bisObject);
-      // GetEntryType('/') rides the returned moved handle, same compact form,
-      // still before any domain conversion.
-      const entry = await xfer('entry', pathPacket(7, []), bisObject);
-      await say('[f5] BIS ' + bisId + ' rooted, entry ' + (entry ? entry.result : 'x') +
-        (entry && entry.result === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
-
-      // Storage stages need the domain: convert if still plain.
-      if (root === null) { root = await toDomain(); if (!root) return; }
       const stor = await xfer('storage', domainPacket(root, 200, [], {}), fsp, true);
       if (!stor || stor.result !== 0 || !stor.objects.length) {
         await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
@@ -331,6 +365,7 @@
         await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
       } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
       await say('fs chain PASS');
+      // rooted is reported inside the [f5] lines above.
     } finally {
       for (const h of handles.reverse()) {
         try { call_rop(sdk + FSF.close[0], BigInt(h), 0n, 0n, 0n); } catch (_) {}
