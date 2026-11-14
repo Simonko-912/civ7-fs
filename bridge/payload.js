@@ -65,8 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-9';
-
+  const VERSION = 'ldn-10';
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
@@ -162,9 +161,16 @@
     for (let i = 0; i < 4; i++) { out[i] = w0b[i]; out[4 + i] = w1[i]; }
     return out;
   }
-  // Mirror of ipc.response()/domain.response(): walk headers, grab the
-  // SFCO/SFCI-style result, handles, and reply objects.
-  function parseReply(b) {
+  // Reply parse: walk headers like ipc.response()/domain.response(), but if
+  // the fixed walk lands off the magic, scan forward for it. Hardware shows
+  // some fsp-srv replies with an extra header block (moves in the special
+  // section), which the strict walk can overshoot.
+  function findMagic(b, from) {
+    for (let at = from; at + 4 <= Math.min(b.length, 64); at += 4)
+      if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79) return at;
+    return -1;
+  }
+  function parseReply(b, domainExpected) {
     const first = u32(b, 0), second = u32(b, 4);
     let at = 8;
     const copies = [], moves = [];
@@ -177,15 +183,21 @@
     at += (first >>> 16 & 15) * 8;
     at += ((first >>> 20 & 15) + (first >>> 24 & 15) + (first >>> 28 & 15)) * 12;
     at = (at + 15) & ~15;
-    const domainReply = b[at] === 1;
-    if (domainReply) {
+    // Domain reply: object header at `at` — count, data size (+8), result
+    // (+24), then out data (+32) and returned object ids. Reply data for a
+    // zero-object result is valid too, so a caller-side hint covers the
+    // count==0 case where the magic heuristic cannot see it.
+    if (b[at] === 1 || domainExpected) {
       const count = u32(b, at), result = u32(b, at + 24);
       const objects = [];
-      if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, at + 32 + 4 * i));
+      if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, at + 32 + u32(b, at + 8) + 4 * i));
       return {result, objects, moves, copies, dataAt: at + 32};
     }
-    if (!(b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79))
-      return {result: 0xffffffff, objects: [], moves, copies, dataAt: at + 16, missing: true};
+    if (!(b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79)) {
+      const scan = findMagic(b, at);
+      if (scan < 0) return {result: 0xffffffff, objects: [], moves, copies, dataAt: at + 16, missing: true};
+      at = scan;
+    }
     return {result: u32(b, at + 8), objects: [], moves, copies, dataAt: at + 16};
   }
 
@@ -216,15 +228,15 @@
       handles.push(fsp);
       await say('[f1] fsp-srv handle ' + fsp);
 
-      const xfer = async (label, bytes, handle) => {
+      const xfer = async (label, bytes, handle, domainExpected) => {
         putBytes(pkt, bytes.concat(new Array(256 - bytes.length).fill(0)));
         // svcSendSyncRequest returns the input-header pointer on this sdk
         // build; other builds return 0. Either is fine for the transport;
-        // the parsed reply decides. Only a missing SFCO section is a real
+        // the parsed reply decides. Only a missing reply section is a real
         // failure, and then the raw head of the reply area says why.
         const sent = call_rop(sdk + FSF.send[0], pkt, 4096n, BigInt(handle), 0n);
         const raw = getBytes(pkt, 256);
-        const reply = parseReply(raw);
+        const reply = parseReply(raw, domainExpected);
         if (reply.missing) {
           let hx = '';
           for (let i = 0; i < 24; i++) hx += raw[i].toString(16).padStart(2, '0') + ' ';
@@ -247,23 +259,21 @@
       const root = u32(getBytes(pkt, 64), dom.dataAt);
       await say('[f3] domain root ' + root);
 
-      // OpenStorage (domain cmd 200) -> object + session handle, GetSize (cmd 4).
-      const stor = await xfer('storage', domainPacket(root, 200, [], {}), fsp);
+      // OpenStorage (domain cmd 200) -> storage OBJECT id. Like domain.send
+      // in shared/domain.cjs, domain traffic always rides the SESSION handle
+      // (fsp) with the object id inside the wrapped header — never the bare
+      // object id as a send target.
+      const stor = await xfer('storage', domainPacket(root, 200, [], {}), fsp, true);
       if (!stor || stor.result !== 0 || !stor.objects.length) {
         await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
       }
-      // Domain OpenStorage returns the storage as a domain OBJECT id; the
-      // plain-handle forms arrive via moves/copies. Accept any of them,
-      // same priority as domain.cjs openStorage.
-      const storHandle = stor.objects[0] || stor.moves[0] || stor.copies[0];
-      if (storHandle) handles.push(storHandle);
-      if (storHandle) {
-        const size = await xfer('size', buildPacket(4, [], {}), storHandle);
-        if (size && size.result === 0) {
-          const d = getBytes(pkt, 64);
-          await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
-        } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
-      }
+      const storObject = stor.objects[0];
+      await say('[f4] storage object ' + storObject);
+      const size = await xfer('size', domainPacket(storObject, 4, [], {}), fsp, true);
+      if (size && size.result === 0) {
+        const d = getBytes(pkt, 64);
+        await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
+      } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
 
       // OpenBisFileSystem(31 = SYSTEM) + GetEntryType('/') on the rooted handle:
       // the compact descriptor form from fs-root-control.pathRequest:
@@ -278,12 +288,16 @@
         for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
         return b;
       };
-      const bis = await xfer('bis', pathPacket(11, le32(31)), fsp);
+      const bis = await xfer('bis', domainPacket(root, 11, le32(31),
+        {send: [{address: pathB, size: 0x301}]}), fsp, true);
       if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
-      const bisHandle = bis.moves[0] || bis.copies[0];
+      const bisHandle = bis.objects[0] || bis.moves[0] || bis.copies[0];
       if (!bisHandle) { await say('fs FAIL: BIS handle not returned'); return; }
       handles.push(bisHandle);
-      const entry = await xfer('entry', pathPacket(7, []), bisHandle);
+      // GetEntryType('/') on the BIS object: inline '/' at pathB plus the
+      // same in-descriptor the engine's pathRequest packs.
+      const entry = await xfer('entry', domainPacket(bisHandle, 7, [],
+        {send: [{address: pathB, size: 0x301}]}), fsp, true);
       await say('[f5] BIS SYSTEM rooted, entry ' + (entry ? entry.result : 'x'));
       await say('fs chain PASS');
     } finally {
