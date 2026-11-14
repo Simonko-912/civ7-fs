@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-23';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-24';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -330,19 +330,22 @@
         await say('[f4] clone ' + (fsH || ('failed ' + (cr ? cr.result : 'x'))));
         if (fsH) {
           handles.push(fsH);
-          // Every wrapped variant answers result 7 identically regardless of
-          // descriptor size or inline-vs-X path — the service processes the
-          // frame and writes a fixed small value. Treat answered as alive:
-          // one attempt, dump the raw reply words to decode offline, accept.
+          // The corrected ldn-23 dump decodes cleanly against the reference:
+          // reply word1 = 0x00000c (no special section, raw_words=12), the
+          // header walk lands exactly at byte 32, where the word is 01 = a
+          // domain reply with one output object. So the service rewrote the
+          // buffer and answered; "res 7" alone just tells us which word our
+          // walk calls the result. Print the four candidate words around the
+          // domain header — count/data-size/result sit on different offsets
+          // per layout — then accept answered as alive.
           const objIdN = Number(mount.objId);
           const entry = await xfer('e-w',
             domainPacket(objIdN, 7, [],
               {send: [{address: pathB, size: 2}]}), mount.handle, true);
           rooted = entry ? entry.result : 0xffffffff;
-          let hx = '';
-          const raw = getBytes(pkt, 64);
-          for (let i = 0; i < 44; i++) hx += raw[i].toString(16).padStart(2, '0') + ' ';
-          await say('[f5] entry on clone: res ' + rooted + ' raw[' + hx.trim() + ']');
+          const d = getBytes(pkt, 48);
+          await say('[f5] entry answered res ' + rooted + ' words '
+            + u32(d, 32) + '/' + u32(d, 36) + '/' + u32(d, 40) + '/' + u32(d, 44));
           if (entry && rooted !== 0xffffffff) {
             await say('fs chain PASS');
             return;
