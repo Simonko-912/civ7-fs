@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-12';
+  const VERSION = 'ldn-13';
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
@@ -165,8 +165,14 @@
   // the fixed walk lands off the magic, scan forward for it. Hardware shows
   // some fsp-srv replies with an extra header block (moves in the special
   // section), which the strict walk can overshoot.
+  // Plain replies can be SHORTER than the request: the header walk computed
+  // from our own words can overshoot the reply's real SFCO, which may sit
+  // before the walk position. Scan the whole window both ways, byte-aligned.
   function findMagic(b, from) {
-    for (let at = from; at + 4 <= Math.min(b.length, 64); at += 4)
+    const cap = Math.min(b.length, 96);
+    for (let at = Math.max(8, Math.min(from, cap - 4)); at >= 8; at--)
+      if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79) return at;
+    for (let at = Math.max(8, from); at + 4 <= cap; at++)
       if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79) return at;
     return -1;
   }
@@ -239,10 +245,12 @@
         const reply = parseReply(raw, domainExpected);
         if (reply.missing) {
           let hx = '';
-          for (let i = 0; i < 24; i++) hx += raw[i].toString(16).padStart(2, '0') + ' ';
+          for (let i = 0; i < 40; i++) hx += raw[i].toString(16).padStart(2, '0') + ' ';
           await say('fs FAIL: ' + label + ' transport ' + sent + ' reply[' + hx.trim() + ']');
           return null;
         }
+        if (reply.result !== 0)
+          await say('note: ' + label + ' answered result ' + reply.result);
         if (sent !== 0n && !(xfer.note || (xfer.note = true)))
           await say('note: send returns ' + hex(sent) + ' (input pointer), reply parsed anyway');
         return reply;
@@ -279,7 +287,9 @@
       // the compact descriptor form from fs-root-control.pathRequest:
       // word0 = 4 | (1<<16) (one in-desc), descriptor words at offsets 8/12
       // (packed size/address-high bits, address low 32).
-      putBytes(pathB, [47, ...new Array(0x300).fill(0)]);
+      // Engine probe: bis input buffer is zero-filled, '/' is only written
+      // before the GetEntryType step.
+      putBytes(pathB, new Array(0x301).fill(0));
       const pathPacket = (cmd, inp) => {
         const b = buildPacket(cmd, inp, {});
         const packed = Number((0x301n << 16n) | ((pathB >> 36n) & 7n) << 6n | ((pathB >> 32n) & 15n) << 12n);
@@ -288,18 +298,26 @@
         for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
         return b;
       };
-      // Engine-faithful combo (fs-root-control root-probe-bis-filesystem):
-      // plain compact pathRequest frames are addressed to the domain ROOT
-      // OBJECT ID (not the session handle); the OpenStorage/domain-wrapped
-      // form above stays on the session handle. Handle comes back in the
-      // moves list (domain.oneHandle), GetEntryType then rides that handle.
-      const bis = await xfer('bis', pathPacket(11, le32(31)), root);
+      // Transport evidence from hardware: domain-wrapped frames on the session
+      // handle get real answers (f3/f4), plain compact frames leave the buffer
+      // untouched. So keep the domain wrap here too, but walk the filesystem
+      // ids like fs-root-control's probe: SYSTEM 31 first, USER 30 second —
+      // result 11 on one id does not mean the step is wrong, just that this
+      // console names the other bis id.
+      let bis = null, bisId = 0;
+      for (const id of [31, 30]) {
+        bis = await xfer('bis', domainPacket(root, 11, le32(id),
+          {send: [{address: pathB, size: 0x301}]}), fsp, true);
+        if (bis && bis.result === 0) { bisId = id; break; }
+      }
       if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
-      const bisHandle = bis.moves[0] || bis.objects[0] || bis.copies[0];
-      if (!bisHandle) { await say('fs FAIL: BIS handle not returned'); return; }
-      handles.push(bisHandle);
-      const entry = await xfer('entry', pathPacket(7, []), bisHandle);
-      await say('[f5] BIS SYSTEM rooted, entry ' + (entry ? entry.result : 'x') +
+      putBytes(pathB, [47, ...new Array(0x300).fill(0)]);
+      const bisObject = bis.objects[0] || bis.moves[0] || bis.copies[0];
+      if (!bisObject) { await say('fs FAIL: BIS handle not returned'); return; }
+      handles.push(bisObject);
+      const entry = await xfer('entry', domainPacket(bisObject, 7, [],
+        {send: [{address: pathB, size: 0x301}]}), fsp, true);
+      await say('[f5] BIS ' + bisId + ' rooted, entry ' + (entry ? entry.result : 'x') +
         (entry && entry.result === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
       await say('fs chain PASS');
     } finally {
