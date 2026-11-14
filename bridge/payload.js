@@ -65,8 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-16';
-  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-17';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -261,35 +260,9 @@
       if (!init || init.result !== 0) { await say('fs FAIL: fsp-srv init ' + (init ? init.result : 'x')); return; }
       await say('[f2] fsp-srv initialized');
 
-      // ConvertToDomain (control cmd 0) -> root object id.
-      const dom = await xfer('domain', controlPacket(0, [], 0), fsp);
-      if (!dom || dom.result !== 0) { await say('fs FAIL: ConvertToDomain ' + (dom ? dom.result : 'x')); return; }
-      const root = u32(getBytes(pkt, 64), dom.dataAt);
-      await say('[f3] domain root ' + root);
-
-      // OpenStorage (domain cmd 200) -> storage OBJECT id. Like domain.send
-      // in shared/domain.cjs, domain traffic always rides the SESSION handle
-      // (fsp) with the object id inside the wrapped header — never the bare
-      // object id as a send target.
-      const stor = await xfer('storage', domainPacket(root, 200, [], {}), fsp, true);
-      if (!stor || stor.result !== 0 || !stor.objects.length) {
-        await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
-      }
-      const storObject = stor.objects[0];
-      await say('[f4] storage object ' + storObject);
-      const size = await xfer('size', domainPacket(storObject, 4, [], {}), fsp, true);
-      if (size && size.result === 0) {
-        const d = getBytes(pkt, 64);
-        await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
-      } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
-
-      // Compact path request, exact engine pathRequest()/reference
-      // writeXDesc layout: numA=1 header, 8-byte A descriptor at +8
-      // (packed size/high-address bits, address low), then RAW data
-      // straight at +16 — SFCI magic, zero, cmd, zero, input. No 12-byte
-      // descriptors, no alignment padding; that padding is why earlier
-      // plain frames went unanswered (svc computes the data offset from
-      // the descriptor counts and found no magic there).
+      // Compact path request, engine pathRequest()/reference writeXDesc
+      // layout: numA=1 header, 8-byte A descriptor at +8, RAW data straight
+      // at +16 (SFCI magic, zero, cmd, zero, input).
       putBytes(pathB, new Array(0x301).fill(0));
       const pathPacket = (cmd, inp) => {
         const len = (inp || []).length;
@@ -302,26 +275,61 @@
           83, 70, 67, 73, 0, 0, 0, 0,
           ...le32(cmd >>> 0), 0, 0, 0, 0].concat(inp || []);
       };
-      // Engine order: BIS probe + GetEntryType are plain compact frames on
-      // the session handle; the domain wrap only serves OpenStorage. '/' is
-      // written before GetEntryType only, the bis buffer stays zero-filled.
+      const toDomain = async () => {
+        const dom = await xfer('domain', controlPacket(0, [], 0), fsp);
+        if (!dom || dom.result !== 0) {
+          await say('fs FAIL: ConvertToDomain ' + (dom ? dom.result : 'x'));
+          return null;
+        }
+        const r = u32(getBytes(pkt, 64), dom.dataAt);
+        await say('[f3] domain root ' + r);
+        return r;
+      };
+      // Engine order (fs-root-control): the BIS probe + GetEntryType run as
+      // plain compact frames while the session is still NON-domain. Once
+      // ConvertCurrentObjectToDomain flipped the session, plain frames were
+      // left untouched in every hardware dump while domain-wrapped ones
+      // answered — so walk BIS first with plain frames, convert afterwards
+      // for the storage stages. Bis ids: SYSTEM 31, then USER 30.
       let bis = null, bisId = 0;
       for (const id of [31, 30]) {
         bis = await xfer('bis', pathPacket(11, le32(id)), fsp);
-        if (bis && bis.missing)
+        if (bis && bis.result === 0) { bisId = id; break; }
+      }
+      let root = null;
+      if (!bis || bis.result !== 0) {
+        root = await toDomain();
+        if (!root) return;
+        for (const id of [31, 30]) {
           bis = await xfer('bis', domainPacket(root, 11, le32(id),
             {send: [{address: pathB, size: 0x301}]}), fsp, true);
-        if (bis && bis.result === 0) { bisId = id; break; }
+          if (bis && bis.result === 0) { bisId = id; break; }
+        }
       }
       if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
       putBytes(pathB, [47, ...new Array(0x300).fill(0)]);
       const bisObject = bis.moves[0] || bis.objects[0] || bis.copies[0];
       if (!bisObject) { await say('fs FAIL: BIS handle not returned'); return; }
       handles.push(bisObject);
-      // GetEntryType('/') rides the returned moved handle, same compact form.
+      // GetEntryType('/') rides the returned moved handle, same compact form,
+      // still before any domain conversion.
       const entry = await xfer('entry', pathPacket(7, []), bisObject);
       await say('[f5] BIS ' + bisId + ' rooted, entry ' + (entry ? entry.result : 'x') +
         (entry && entry.result === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
+
+      // Storage stages need the domain: convert if still plain.
+      if (root === null) { root = await toDomain(); if (!root) return; }
+      const stor = await xfer('storage', domainPacket(root, 200, [], {}), fsp, true);
+      if (!stor || stor.result !== 0 || !stor.objects.length) {
+        await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
+      }
+      const storObject = stor.objects[0];
+      await say('[f4] storage object ' + storObject);
+      const size = await xfer('size', domainPacket(storObject, 4, [], {}), fsp, true);
+      if (size && size.result === 0) {
+        const d = getBytes(pkt, 64);
+        await say('[f4] storage size ' + BigInt(u32(d, size.dataAt)));
+      } else await say('[f4] storage size skipped (' + (size ? size.result : 'x') + ')');
       await say('fs chain PASS');
     } finally {
       for (const h of handles.reverse()) {
