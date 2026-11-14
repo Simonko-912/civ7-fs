@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-13';
+  const VERSION = 'ldn-14';
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
@@ -292,7 +292,8 @@
       putBytes(pathB, new Array(0x301).fill(0));
       const pathPacket = (cmd, inp) => {
         const b = buildPacket(cmd, inp, {});
-        const packed = Number((0x301n << 16n) | ((pathB >> 36n) & 7n) << 6n | ((pathB >> 32n) & 15n) << 12n);
+        const packed = Number((0x301n << 16n) | ((pathB >> 36n) & 7n) << 6n |
+          ((pathB >> 32n) & 15n) << 12n);
         const w0 = le32((4 | (1 << 16)) >>> 0), pw = le32(packed),
           aw = le32(Number(pathB & 0xffffffffn));
         for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
@@ -315,8 +316,15 @@
       const bisObject = bis.objects[0] || bis.moves[0] || bis.copies[0];
       if (!bisObject) { await say('fs FAIL: BIS handle not returned'); return; }
       handles.push(bisObject);
-      const entry = await xfer('entry', domainPacket(bisObject, 7, [],
-        {send: [{address: pathB, size: 0x301}]}), fsp, true);
+      // Reference-flow (ItsNerisma/CivSwitchFS cloneObject): Control cmd 1
+      // (CopyFromCurrentDomain) turns a domain object into an ordinary handle,
+      // and plain compact frames work on THAT handle — matching their proven
+      // clone-then-plain pattern. GetEntryType then rides the clone.
+      const cloned = await xfer('clone', controlPacket(1, le32(bisObject), 0), fsp);
+      const entryHandle = (cloned && cloned.result === 0 &&
+        (cloned.moves[0] || cloned.objects[0] || cloned.copies[0] || bisObject)) || bisObject;
+      if (entryHandle !== bisObject) handles.push(entryHandle);
+      const entry = await xfer('entry', pathPacket(7, []), entryHandle);
       await say('[f5] BIS ' + bisId + ' rooted, entry ' + (entry ? entry.result : 'x') +
         (entry && entry.result === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
       await say('fs chain PASS');
