@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-14';
+  const VERSION = 'ldn-15';
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
@@ -299,32 +299,32 @@
         for (let i = 0; i < 4; i++) { b[i] = w0[i]; b[8 + i] = pw[i]; b[12 + i] = aw[i]; }
         return b;
       };
-      // Transport evidence from hardware: domain-wrapped frames on the session
-      // handle get real answers (f3/f4), plain compact frames leave the buffer
-      // untouched. So keep the domain wrap here too, but walk the filesystem
-      // ids like fs-root-control's probe: SYSTEM 31 first, USER 30 second —
-      // result 11 on one id does not mean the step is wrong, just that this
-      // console names the other bis id.
+      // Reference-flow (ItsNerisma/CivSwitchFS): first thing after
+      // ConvertToDomain, clone the root domain object with Control cmd 1
+      // (CopyFromCurrentDomain) into an ORDINARY handle — everything after
+      // that is plain compact frames on real handles, no domain wraps.
+      const cloned = await xfer('clone', controlPacket(1, le32(root), 0), fsp);
+      const fsRoot = cloned && cloned.result === 0 &&
+        (cloned.moves[0] || cloned.copies[0] || cloned.objects[0]);
+      await say('[f3b] root clone ' + (fsRoot || ('skipped (' + (cloned ? cloned.result : 'x') + ')')));
+      const bisTarget = fsRoot || root;
+      if (fsRoot) handles.push(fsRoot);
       let bis = null, bisId = 0;
       for (const id of [31, 30]) {
-        bis = await xfer('bis', domainPacket(root, 11, le32(id),
-          {send: [{address: pathB, size: 0x301}]}), fsp, true);
+        bis = fsRoot
+          ? await xfer('bis', pathPacket(11, le32(id)), fsRoot)
+          : await xfer('bis', domainPacket(root, 11, le32(id),
+              {send: [{address: pathB, size: 0x301}]}), fsp, true);
         if (bis && bis.result === 0) { bisId = id; break; }
       }
       if (!bis || bis.result !== 0) { await say('[f5] BIS open result ' + (bis ? bis.result : 'x')); return; }
       putBytes(pathB, [47, ...new Array(0x300).fill(0)]);
-      const bisObject = bis.objects[0] || bis.moves[0] || bis.copies[0];
+      const bisObject = bis.moves[0] || bis.objects[0] || bis.copies[0];
       if (!bisObject) { await say('fs FAIL: BIS handle not returned'); return; }
       handles.push(bisObject);
-      // Reference-flow (ItsNerisma/CivSwitchFS cloneObject): Control cmd 1
-      // (CopyFromCurrentDomain) turns a domain object into an ordinary handle,
-      // and plain compact frames work on THAT handle — matching their proven
-      // clone-then-plain pattern. GetEntryType then rides the clone.
-      const cloned = await xfer('clone', controlPacket(1, le32(bisObject), 0), fsp);
-      const entryHandle = (cloned && cloned.result === 0 &&
-        (cloned.moves[0] || cloned.objects[0] || cloned.copies[0] || bisObject)) || bisObject;
-      if (entryHandle !== bisObject) handles.push(entryHandle);
-      const entry = await xfer('entry', pathPacket(7, []), entryHandle);
+      // BIS open returns a moved ordinary handle: GetEntryType('/') rides it
+      // as a plain compact frame (reference ipcGetEntryType).
+      const entry = await xfer('entry', pathPacket(7, []), bisObject);
       await say('[f5] BIS ' + bisId + ' rooted, entry ' + (entry ? entry.result : 'x') +
         (entry && entry.result === 0 ? ' type ' + u32(getBytes(pkt, 64), entry.dataAt) : ''));
       await say('fs chain PASS');
