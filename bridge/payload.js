@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-6';
+  const VERSION = 'ldn-7';
 
   // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
@@ -218,9 +218,17 @@
 
       const xfer = async (label, bytes, handle) => {
         putBytes(pkt, bytes.concat(new Array(256 - bytes.length).fill(0)));
+        // svcSendSyncRequest returns the input-header pointer on this sdk
+        // build (hardware: 0x1b0ea9200 = scratch+0x200, matching the packed
+        // BIS descriptor), where other builds return 0. Either is fine for
+        // the transport; the parsed reply decides. Only a missing SFCO
+        // section is a real failure.
         const sent = call_rop(sdk + FSF.send[0], pkt, 4096n, BigInt(handle), 0n);
-        if (sent !== 0n) { await say('fs FAIL: ' + label + ' transport ' + sent); return null; }
-        return parseReply(getBytes(pkt, 256));
+        const reply = parseReply(getBytes(pkt, 256));
+        if (reply.missing) { await say('fs FAIL: ' + label + ' transport ' + sent); return null; }
+        if (sent !== 0n && !(xfer.note || (xfer.note = true)))
+          await say('note: send returns ' + hex(sent) + ' (input pointer), reply parsed anyway');
+        return reply;
       };
 
       // Initialize: SetCurrentProcess (cmd 1, PID 0 in the pid block).
