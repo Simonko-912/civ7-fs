@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-30';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-31';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -199,10 +199,13 @@
       // data size (0x14), u32 at +4 = target object id (echoes the mount
       // obj). Reference readDomainObjects: ids start at data start + dataSize,
       // i.e. header + 8 + dataSize. Scan for that exact shape.
+      // dataSize may legitimately be 0 (header-only reply): the e-w reply on
+      // this boot answered through byte-32 header with size 0, and requiring
+      // size>0 pushed the scan past the real header back to res-7 confusion.
       let h = -1;
       for (let p = at; p + 8 <= Math.min(b.length, 96); p += 4) {
         const sz = b[p + 2] + b[p + 3] * 0x100;
-        if (b[p] === 1 && sz > 0 && sz <= 0x800) { h = p; break; }
+        if (b[p] === 1 && sz <= 0x800) { h = p; break; }
       }
       if (h >= 0) {
         // Reference domain.js response: header(+0x10-equiv)=count, here also
