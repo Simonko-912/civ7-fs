@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-37';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-38';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -172,10 +172,23 @@
   // 0. The old scanned-header heuristic could stop at the echoed descriptor
   // word (byte0==1 there too) - that is the 'result 7' misread.
   function findMagic(b, from) {
+    // ldn-38: prefer the reply magic 'SFCO' over an echoed request 'SFCI'.
+    // The svc leaves the request segment in place (ldn-34/37 dumps), so the
+    // first magic is usually our own echoed request header and the REAL
+    // reply section follows it; anchoring on the echo read the cmd echo
+    // (7/9) as the result. If the svc rewrote the buffer instead, 'SFCO'
+    // is the only magic present and the preference is a no-op. Falls back
+    // to the first magic of either kind when no reply magic is present
+    // (domain echo replies keep working off the echoed segment header).
     const cap = Math.min(b.length, 160);
-    for (let at = (from + 3) & ~3; at + 4 <= cap; at += 4)
-      if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && (b[at + 3] === 79 || b[at + 3] === 73)) return at;
-    return -1;
+    let first = -1;
+    for (let at = (from + 3) & ~3; at + 4 <= cap; at += 4) {
+      if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67) {
+        if (b[at + 3] === 79) return at;
+        if (first < 0) first = at;
+      }
+    }
+    return first;
   }
   function parseReply(b, domainExpected) {
     const first = u32(b, 0), second = u32(b, 4);
@@ -390,9 +403,18 @@
           const entry = await xfer('e-w', pathFrame(7, 2, [], 8), fsH, false);
           rooted = entry ? entry.result : 0xffffffff;
           if (entry) {
-            await say('[f5] entry res ' + rooted + ' type ' + u32(getBytes(pkt, 64), entry.dataAt));
+            // one-shot header dump pins the anchor: reply magic position,
+            // result word and out-data relative to the echoed request seg.
+            const d = getBytes(pkt, 96);
+            let hx = '';
+            for (let i = 16; i < 80; i++) hx += d[i].toString(16).padStart(2, '0') + ' ';
+            await say('[f5] e-w raw[' + hx.trim() + '] anchor ' + entry.dataAt);
+            await say('[f5] entry res ' + rooted + ' type ' + u32(d, entry.dataAt));
           }
-          if (entry && entry.result === 0) {
+          // ldn-38: answered continues the chain even if the result word at
+          // magic+8 is still an echo; a missing reply (missing:true) is the
+          // only real failure, matching how bis/e-w were proven to behave.
+          if (entry) {
             const od = await xfer('od', pathFrame(9, 0x301, le32(3), 0xc), fsH, false);
             if (!od || od.result !== 0) {
               await say('[f6] dir open res ' + (od ? od.result : 'x'));
