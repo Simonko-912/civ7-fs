@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-27';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-28';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -200,8 +200,12 @@
       // same scan and take the first plausible header. Result at h+24,
       // out-object ids after the reply data at h+32+dataSize.
       let h = at;
+      // Zero padding words are < 256 too — accepting them picked a padding
+      // offset with count=0 and no objects (dir handle undefined on ldn-27).
+      // A real domain-reply header has count in 1..255; keep scanning past
+      // zeros, fall back to the strict position only if nothing matches.
       for (let p = at; p + 28 <= Math.min(b.length, 96); p += 4)
-        if ((u32(b, p) >>> 0) < 256) { h = p; break; }
+        if ((u32(b, p) >>> 0) < 256 && u32(b, p) !== 0) { h = p; break; }
       const count = u32(b, h), result = u32(b, h + 24);
       const objects = [];
       if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, h + 32 + u32(b, h + 8) + 4 * i));
