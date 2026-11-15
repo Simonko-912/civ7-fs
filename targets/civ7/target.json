@@ -95,5 +95,13 @@
       "0x0400000000000013",
       "0x040000000000001d"
     ]
-  }
+  },
+  "minimumCacheHeld": 9680,
+  "aliasFieldCopies": 1,
+  "aliasAttempts": 6,
+  "maxSafeWaves": 180,
+  "waveCooldownMs": 25,
+  "attemptCooldownMs": 150,
+  "releaseDelayNs": 2500000,
+  "rpcTimeoutMs": 30000
 }

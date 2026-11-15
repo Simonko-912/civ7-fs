@@ -1,14 +1,21 @@
 'use strict';
 
-function hasWindow(row) {
+// Window qualification is deliberately looser than field-copy acceptance: a wave that
+// reached the gap with a small held population is still evidence of a window, while
+// copying a field additionally requires minimumCacheHeld (target-tuned, 9680 on Civ7).
+// Kit v1.1.0 uses 0x15d0 here and keeps the strict value for the copies.
+function hasWindow(row, minCacheHeld = 0x15d0) {
   return row?.restored === true && row.triggerAborted === false && row.allPending === true &&
     Number.isFinite(row.receiveOrderMarginUs) && row.receiveOrderMarginUs >= 300 &&
-    Number.isFinite(row.preReleaseUsed) && row.preReleaseUsed >= 0x2600;
+    Number.isFinite(row.preReleaseUsed) && row.preReleaseUsed >= minCacheHeld;
 }
 
 function markerHit(row) {
-  return hasWindow(row) && row.canaryResult === 0 && row.canaryType === 0 &&
-    Array.isArray(row.changedPaths) && row.changedPaths.length === 1 && row.changedPaths[0] === 'canary';
+  return hasWindow(row, 0x15d0) && row.canaryResult === 0 && row.canaryType === 0 &&
+    Array.isArray(row.changedPaths) && row.changedPaths.includes('canary') &&
+    row.changedPaths.every(name => name === 'canary' ||
+      ((name === 'filler0' || name === 'filler1') &&
+        (!row.rows || row.rows.find(r => r.role === name)?.result === 0x2eea02)));
 }
 
 function summarize(rows) {
