@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-28';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-29';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -370,6 +370,13 @@
             if (!od || od.result !== 0) {
               await say('[f6] dir open res ' + (od ? od.result : 'x'));
             } else {
+              // result 0 with empty handle lists: one-shot raw dump of the
+              // OpenDirectory reply (same trick that pinned the entry decode)
+              // to see where the moved handle/object id actually sits.
+              const rw = getBytes(pkt, 96);
+              let hx = '';
+              for (let i = 0; i < 48; i++) hx += rw[i].toString(16).padStart(2, '0') + ' ';
+              await say('[f6] od raw[' + hx.trim() + '] hA ' + od.moves.length + '/' + od.objects.length + '/' + od.copies.length);
               const dirH = od.moves[0] || od.objects[0] || od.copies[0];
               await say('[f6] dir handle ' + dirH);
               if (dirH) {
