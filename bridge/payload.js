@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-36';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-37';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -369,76 +369,67 @@
         await say('[f4] clone ' + (fsH || ('failed ' + (cr ? cr.result : 'x'))));
         if (fsH) {
           handles.push(fsH);
-          // The corrected ldn-23 dump decodes cleanly against the reference:
-          // reply word1 = 0x00000c (no special section, raw_words=12), the
-          // header walk lands exactly at byte 32, where the word is 01 = a
-          // domain reply with one output object. So the service rewrote the
-          // buffer and answered; "res 7" alone just tells us which word our
-          // walk calls the result. Print the four candidate words around the
-          // domain header — count/data-size/result sit on different offsets
-          // per layout — then accept answered as alive.
-          const objIdN = Number(mount.objId);
-          const entry = await xfer('e-w',
-            domainPacket(objIdN, 7, [],
-              {send: [{address: pathB, size: 2}]}), mount.handle, true);
+          // ldn-37: reference ipcGetEntryType/ipcListDirectory send PLAIN
+          // CMIF frames (no domain header) straight to the CLONED ordinary
+          // handle, and OpenDirectory's dir handle arrives in the reply's
+          // moved-handle slot (cmifReply moves[0]), not the domain out-object
+          // list. Layout per reference: X desc @8 (pathBuf, size 2 for
+          // GetEntryType, 0x301 for OpenDirectory), SFCI @0x10, cmd @0x18,
+          // mode @0x20. Our ldn-35 domain-wrap answered but put no handle in
+          // moves - that was the 'dir handle undefined'.
+          const pathFrame = (cmd, xsize, inp, rawWords) => {
+            const packed = Number((BigInt(xsize) << 16n) | ((pathB >> 36n) & 7n) << 6n |
+              ((pathB >> 32n) & 15n) << 12n);
+            const b = [...le32((4 | (1 << 16)) >>> 0), ...le32(rawWords),
+              ...le32(packed), ...le32(Number(pathB & 0xffffffffn))];
+            while (b.length < 0x10) b.push(0);
+            b.push(83, 70, 67, 73, 0, 0, 0, 0);
+            b.push(...le32(cmd >>> 0), ...new Array(4).fill(0));
+            return b.concat(inp || []);
+          };
+          const entry = await xfer('e-w', pathFrame(7, 2, [], 8), fsH, false);
           rooted = entry ? entry.result : 0xffffffff;
-          // ldn-34: bis proved the header-only flow works end to end even
-          // when the e-w result word is not what our offset expects (root
-          // 140, storage obj 143, size all decoded downstream). The result
-          // word is thus demoted to a note; an answered reply continues the
-          // chain. One-shot extended dump (bytes 32..87) pins byte56 vs the
-          // echoed-id word if the type line still misreads.
           if (entry) {
-            const d = getBytes(pkt, 128);
-            let hx = '';
-            for (let i = 32; i < 88; i++) hx += d[i].toString(16).padStart(2, '0') + ' ';
-            await say('[f5] e-w raw[' + hx.trim() + ']');
-            await say('[f5] entry res ' + rooted + ' type ' + u32(d, entry.dataAt));
-            // Entry ok -> continue the chain (reference ipcListDirectory):
-            // OpenDirectory('/') cmd 9, mode 3 inline + X desc path at full
-            // size 0x301, same proven domain wrap. Then ReadDirectory: plain
-            // SFCI cmd 0 + B descriptor on the returned handle, like the
-            // reference sendIPC(dirHandle, readBuf). Entry record: name at
-            // +0, type byte +0x304, size u32 +0x308, stride 0x310.
-            const od = await xfer('od', domainPacket(objIdN, 9, le32(3),
-              {send: [{address: pathB, size: 0x301}]}), mount.handle, true);
+            await say('[f5] entry res ' + rooted + ' type ' + u32(getBytes(pkt, 64), entry.dataAt));
+          }
+          if (entry && entry.result === 0) {
+            const od = await xfer('od', pathFrame(9, 0x301, le32(3), 0xc), fsH, false);
             if (!od || od.result !== 0) {
               await say('[f6] dir open res ' + (od ? od.result : 'x'));
             } else {
-              // ldn-36: the od reply answered (res 0) but objects[0] decoded
-              // to 0 — the id is NOT at dataStart+dataSize the way the type
-              // word sits at dataStart. Dump the full data area (bytes 32..127)
-              // and print every candidate slot, then take the first non-zero
-              // of moves / objects / data-area words — same trick that pinned
-              // the entry decode, so the next log pins the id's true offset.
-              const rw = getBytes(pkt, 128);
-              let hx = '';
-              for (let i = 32; i < 128; i++) hx += rw[i].toString(16).padStart(2, '0') + ' ';
-              await say('[f6] od raw[' + hx.trim() + '] hA ' + od.moves.length + '/' + od.objects.length + '/' + od.copies.length);
-              let dirH = od.moves[0] || od.objects[0] || od.copies[0];
-              if (!dirH) for (const off of [0, 4, 8, 12, 16, 20, 24, 28, 32]) {
-                const v = u32(rw, od.dataAt + off);
-                if (v) { dirH = v; await say('[f6] dir id at data+' + off); break; }
+              const dirH = od.moves[0];
+              if (!dirH) {
+                const rw = getBytes(pkt, 128);
+                let hx = '';
+                for (let i = 0; i < 64; i++) hx += rw[i].toString(16).padStart(2, '0') + ' ';
+                await say('[f6] od no moved handle, raw[' + hx.trim() + '] hA ' + od.moves.length + '/' + od.objects.length + '/' + od.copies.length + ' dataAt ' + od.dataAt);
               }
               await say('[f6] dir handle ' + dirH);
               if (dirH) {
                 const outBuf = W + 0x800n;
-                putBytes(outBuf, new Array(0x620).fill(0));
-                // dirH is a domain object id from the out-object list, so it
-                // rides the same proven wrap on the mount session.
-                const rd = await xfer('rd',
-                  domainPacket(Number(dirH), 0, [],
-                    {recv: [{address: outBuf, size: 0x620}]}), mount.handle, true);
+                const outSize = 0x620;
+                putBytes(outBuf, new Array(outSize).fill(0));
+                // reference ReadDirectory frame: word0 4|(1<<24) = 1 recv
+                // descriptor, raw_words 8, B desc @8 (size, addrLow, hi word),
+                // SFCI @0x20, cmd 0 @0x28, sent on the dir handle itself.
+                const bwd = ((outBuf >> 36n) & 7n) << 2n |
+                  ((BigInt(outSize) >> 32n) & 15n) << 24n | ((outBuf >> 32n) & 15n) << 28n;
+                const rdb = [...le32((4 | (1 << 24)) >>> 0), ...le32(8),
+                  ...le32(outSize), ...le32(Number(outBuf & 0xffffffffn)),
+                  ...le32(Number(bwd))];
+                while (rdb.length < 0x20) rdb.push(0);   // pad 0x14 -> 0x20
+                rdb.push(83, 70, 67, 73, 0, 0, 0, 0);     // SFCI @0x20
+                rdb.push(...le32(0), ...new Array(4).fill(0)); // cmd 0 @0x28
+                const rd = await xfer('rd', rdb, dirH, false);
                 if (!rd || rd.result !== 0) {
                   await say('[f7] dir read res ' + (rd ? rd.result : 'x'));
                 } else {
-                  const rw = getBytes(pkt, 64);
-                  const count = u32(rw, rd.dataAt);
-                  await say('[f7] dir entries ' + Math.min(count, 2));
+                  const count = Number(rd64(BigInt(pkt) + BigInt(rd.dataAt)));
+                  await say('[f7] dir entries ' + Math.min(count, 64));
                   const e0 = getBytes(outBuf, 0x310);
                   let nm = '';
-                  for (let i = 0; i < 64 && e0[i]; i++) nm += String.fromCharCode(e0[i]);
-                  await say('[f7] first "' + nm + '" type ' + e0[0x304] + ' size ' + u32(e0, 0x308));
+                  for (let i = 0; i < 0x301 && e0[i]; i++) nm += String.fromCharCode(e0[i]);
+                  await say('[f7] first "' + nm + '" type ' + e0[0x304] + ' size ' + Number(rd64(outBuf + 0x308n)));
                 }
                 try { call_rop(sdk + FSF.close[0], BigInt(dirH), 0n, 0n, 0n); } catch (_) {}
               }
