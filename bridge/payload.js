@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-31';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-32';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -160,78 +160,51 @@
     for (let i = 0; i < 4; i++) { out[i] = w0b[i]; out[4 + i] = w1[i]; }
     return out;
   }
-  // Reply parse: walk headers like ipc.response()/domain.response(), but if
-  // the fixed walk lands off the magic, scan forward for it. Hardware shows
-  // some fsp-srv replies with an extra header block (moves in the special
-  // section), which the strict walk can overshoot.
-  // Plain replies can be SHORTER than the request: the header walk computed
-  // from our own words can overshoot the reply's real SFCO, which may sit
-  // before the walk position. Scan the whole window both ways, byte-aligned.
+  // Reply parse, literal port of reference decode.js decode_ipc_response:
+  // the walk uses the REPLY's own w0/w1 (special section when bit31 of w1,
+  // ptr x8, send/recv/exch x12), raw_start from that, then FORWARD-aligned
+  // scan for the SFCO magic; result is always magic+8. Domain half follows
+  // domain.js response handling: out-object count byte at the aligned start,
+  // packed dataSize u16 at +2, out data at magic+16, returned object ids at
+  // data+dataSize (readDomainObjects). Both observed replies match: od
+  // echoes the X desc (reply raw_start=20 -> aligned=32, magic=48, count
+  // word 01|0x14<<16, id at 64+0x14=84); e-w answers header-only, dataSize
+  // 0. The old scanned-header heuristic could stop at the echoed descriptor
+  // word (byte0==1 there too) - that is the 'result 7' misread.
   function findMagic(b, from) {
-    const cap = Math.min(b.length, 96);
-    for (let at = Math.max(8, Math.min(from, cap - 4)); at >= 8; at--)
-      if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79) return at;
-    for (let at = Math.max(8, from); at + 4 <= cap; at++)
+    const cap = Math.min(b.length, 160);
+    for (let at = (from + 3) & ~3; at + 4 <= cap; at += 4)
       if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79) return at;
     return -1;
   }
   function parseReply(b, domainExpected) {
     const first = u32(b, 0), second = u32(b, 4);
-    let at = 8;
+    let raw = 8;
     const copies = [], moves = [];
     if (second >>> 31) {
-      const sp = u32(b, at); at += 4;
-      if (sp & 1) at += 8;
-      for (let i = 0; i < (sp >>> 1 & 15); i++, at += 4) copies.push(u32(b, at));
-      for (let i = 0; i < (sp >>> 5 & 15); i++, at += 4) moves.push(u32(b, at));
+      const sp = u32(b, raw); raw += 4;
+      if (sp & 1) raw += 8;
+      for (let i = 0; i < (sp >>> 1 & 15); i++, raw += 4) copies.push(u32(b, raw));
+      for (let i = 0; i < (sp >>> 5 & 15); i++, raw += 4) moves.push(u32(b, raw));
     }
-    at += (first >>> 16 & 15) * 8;
-    at += ((first >>> 20 & 15) + (first >>> 24 & 15) + (first >>> 28 & 15)) * 12;
-    at = (at + 15) & ~15;
-    // Domain reply: object header at `at` — count, data size (+8), result
-    // (+24), then out data (+32) and returned object ids. Reply data for a
-    // zero-object result is valid too, so a caller-side hint covers the
-    // count==0 case where the magic heuristic cannot see it.
-    if (b[at] === 1 || domainExpected) {
-      // The od dump shows the svc echoes our X descriptor into the reply
-      // header (size 0x301, addr words) and puts the domain header at the
-      // aligned raw start (byte 32 here): byte0=object count, u16 at +2 =
-      // data size (0x14), u32 at +4 = target object id (echoes the mount
-      // obj). Reference readDomainObjects: ids start at data start + dataSize,
-      // i.e. header + 8 + dataSize. Scan for that exact shape.
-      // dataSize may legitimately be 0 (header-only reply): the e-w reply on
-      // this boot answered through byte-32 header with size 0, and requiring
-      // size>0 pushed the scan past the real header back to res-7 confusion.
-      let h = -1;
-      for (let p = at; p + 8 <= Math.min(b.length, 96); p += 4) {
-        const sz = b[p + 2] + b[p + 3] * 0x100;
-        if (b[p] === 1 && sz <= 0x800) { h = p; break; }
-      }
-      if (h >= 0) {
-        // Reference domain.js response: header(+0x10-equiv)=count, here also
-        // dataSize u16 and echoed target id; magic h+16, result h+24, data
-        // h+32, returned object ids at data + dataSize (readDomainObjects).
-        const count = b[h], dataSize = b[h + 2] + b[h + 3] * 0x100;
-        const result = u32(b, h + 24);
-        const objects = [];
-        if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, h + 32 + dataSize + 4 * i));
-        return {result, objects, moves, copies, dataAt: h + 32};
-      }
-      // Older reply shape: bare count word, result at +24, ids at +32+size.
-      for (let p = at; p + 28 <= Math.min(b.length, 96); p += 4)
-        if ((u32(b, p) >>> 0) < 256 && u32(b, p) !== 0) { h = p; break; }
-      if (h < 0) h = at;
-      const count = u32(b, h), result = u32(b, h + 24);
-      const objects = [];
-      if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, h + 32 + u32(b, h + 8) + 4 * i));
-      return {result, objects, moves, copies, dataAt: h + 32};
+    raw += (first >>> 16 & 15) * 8;
+    raw += ((first >>> 20 & 15) + (first >>> 24 & 15) + (first >>> 28 & 15)) * 12;
+    const aligned = (raw + 15) & ~15;
+    const magic = findMagic(b, raw);
+    if (magic < 0)
+      return {result: 0xffffffff, objects: [], moves, copies, dataAt: aligned + 16, missing: true};
+    const result = u32(b, magic + 8);
+    const dataAt = magic + 16;
+    const objects = [];
+    if (domainExpected && result === 0) {
+      let h = aligned;
+      if (b[h] < 1 && magic >= 16 && b[magic - 16] >= 1) h = magic - 16;
+      const count = Math.min(b[h], 8);
+      const dataSize = b[h + 2] + b[h + 3] * 0x100;
+      if (count >= 1 && dataSize <= 0x800)
+        for (let i = 0; i < count; i++) objects.push(u32(b, dataAt + dataSize + 4 * i));
     }
-    if (!(b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79)) {
-      const scan = findMagic(b, at);
-      if (scan < 0) return {result: 0xffffffff, objects: [], moves, copies, dataAt: at + 16, missing: true};
-      at = scan;
-    }
-    return {result: u32(b, at + 8), objects: [], moves, copies, dataAt: at + 16};
+    return {result, objects, moves, copies, dataAt};
   }
 
   // FS escalation, console-side: owned fsp-srv session -> domain -> storage,
