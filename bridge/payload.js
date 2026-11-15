@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-33';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-34';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -365,9 +365,18 @@
             domainPacket(objIdN, 7, [],
               {send: [{address: pathB, size: 2}]}), mount.handle, true);
           rooted = entry ? entry.result : 0xffffffff;
-          if (entry && rooted === 0) {
+          // ldn-34: bis proved the header-only flow works end to end even
+          // when the e-w result word is not what our offset expects (root
+          // 140, storage obj 143, size all decoded downstream). The result
+          // word is thus demoted to a note; an answered reply continues the
+          // chain. One-shot extended dump (bytes 32..87) pins byte56 vs the
+          // echoed-id word if the type line still misreads.
+          if (entry) {
             const d = getBytes(pkt, 128);
-            await say('[f5] rooted entry 0 type ' + u32(d, entry.dataAt));
+            let hx = '';
+            for (let i = 32; i < 88; i++) hx += d[i].toString(16).padStart(2, '0') + ' ';
+            await say('[f5] e-w raw[' + hx.trim() + ']');
+            await say('[f5] entry res ' + rooted + ' type ' + u32(d, entry.dataAt));
             // Entry ok -> continue the chain (reference ipcListDirectory):
             // OpenDirectory('/') cmd 9, mode 3 inline + X desc path at full
             // size 0x301, same proven domain wrap. Then ReadDirectory: plain
