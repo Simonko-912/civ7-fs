@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-34';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-35';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -174,7 +174,7 @@
   function findMagic(b, from) {
     const cap = Math.min(b.length, 160);
     for (let at = (from + 3) & ~3; at + 4 <= cap; at += 4)
-      if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && b[at + 3] === 79) return at;
+      if (b[at] === 83 && b[at + 1] === 70 && b[at + 2] === 67 && (b[at + 3] === 79 || b[at + 3] === 73)) return at;
     return -1;
   }
   function parseReply(b, domainExpected) {
@@ -213,6 +213,23 @@
         return {result, objects, moves, copies, dataAt: hs + 32};
       }
       return {result: 0xffffffff, objects: [], moves, copies, dataAt: aligned + 16, missing: true};
+    }
+    // ldn-35: the ldn-34 dump pinned the domain-wrapped reply shape on this
+    // build: the svc leaves the request segment IN PLACE — SFCI magic +
+    // cmd echo at magic/magic+8 (that was the 'result 7/9' misread) — and
+    // appends the reply content AFTER it: out data at magic+16, out-object
+    // ids at magic+16+dataSize. dataSize is in the echoed domain header at
+    // magic-16 (count | size<<16 | target id; e-w: 0x10, od: 0x14). Present
+    // reply = answered, result 0; same data placement as the SFCO path.
+    if (domainExpected && b[magic + 3] === 73 && magic >= 16) {
+      const h = magic - 16;
+      const count = Math.min(b[h], 8);
+      const dataSize = b[h + 2] + b[h + 3] * 0x100;
+      const dataAt = magic + 16;
+      const objects = [];
+      if (count >= 1 && dataSize <= 0x800)
+        for (let i = 0; i < count; i++) objects.push(u32(b, dataAt + dataSize + 4 * i));
+      return {result: 0, objects, moves, copies, dataAt, echo: true};
     }
     const result = u32(b, magic + 8);
     const dataAt = magic + 16;
