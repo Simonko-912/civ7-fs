@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-32';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-33';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -191,8 +191,29 @@
     raw += ((first >>> 20 & 15) + (first >>> 24 & 15) + (first >>> 28 & 15)) * 12;
     const aligned = (raw + 15) & ~15;
     const magic = findMagic(b, raw);
-    if (magic < 0)
+    if (magic < 0) {
+      // ldn-33: on this build the mount-session replies carry NO SFCO within
+      // the window; the domain header starts at the aligned position with the
+      // exact reference shape (bis dump bytes32: byte0=count=1, u16 dataSize
+      // 0x14 at +2, object id 8c=domain root at +4). Both observed magic-less
+      // replies land it at byte 32 while aligned=16 (the X-desc echo adds a
+      // second header line), so scan aligned candidates up from aligned for
+      // that shape; first match wins. Header(hs): result hs+24, out data
+      // hs+32, ids at hs+32+dataSize (readDomainObjects). Accept that layout
+      // instead of declaring the reply missing.
+      let hs = -1;
+      for (let p = aligned; p + 32 <= Math.min(b.length, 160); p += 4)
+        if (b[p] >= 1 && b[p] < 8 && b[p + 2] + b[p + 3] * 0x100 <= 0x800) { hs = p; break; }
+      if (hs >= 0) {
+        const count = Math.min(b[hs], 8), dataSize = b[hs + 2] + b[hs + 3] * 0x100;
+        const result = u32(b, hs + 24);
+        const objects = [];
+        if (domainExpected && result === 0)
+          for (let i = 0; i < count; i++) objects.push(u32(b, hs + 32 + dataSize + 4 * i));
+        return {result, objects, moves, copies, dataAt: hs + 32};
+      }
       return {result: 0xffffffff, objects: [], moves, copies, dataAt: aligned + 16, missing: true};
+    }
     const result = u32(b, magic + 8);
     const dataAt = magic + 16;
     const objects = [];
