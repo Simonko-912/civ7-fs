@@ -65,7 +65,7 @@
   // accepts any of them (mirrors crc32.expected in targets/civ7/target.json).
   const CRC_OK = [157086863n, 3297870604n];
 
-  const VERSION = 'ldn-29';  // FS-stage helpers: the same CMIF framing the PC engine uses
+  const VERSION = 'ldn-30';  // FS-stage helpers: the same CMIF framing the PC engine uses
   // (shared/ipc.cjs + shared/domain.cjs), ported to run inside the eval.
   const FSF = {
     getService: [0x14CC90n, 'fd7bbea9f44f01a9fd030091f30300aa020100b4280040395f0400f181050054ed031faaeb031faaea031faa05000014ed031faaeb031faaea031faae8031f2a'],
@@ -193,19 +193,31 @@
     // zero-object result is valid too, so a caller-side hint covers the
     // count==0 case where the magic heuristic cannot see it.
     if (b[at] === 1 || domainExpected) {
-      // Domain reply header can sit past padding the strict walk misses: the
-      // corrected ldn-23 dump has count=01 at byte 32 while the walk from the
-      // reply header lands at byte 16. Reference decode_ipc_response uses an
-      // aligned_start and treats first_word<256 as the object count; do the
-      // same scan and take the first plausible header. Result at h+24,
-      // out-object ids after the reply data at h+32+dataSize.
-      let h = at;
-      // Zero padding words are < 256 too — accepting them picked a padding
-      // offset with count=0 and no objects (dir handle undefined on ldn-27).
-      // A real domain-reply header has count in 1..255; keep scanning past
-      // zeros, fall back to the strict position only if nothing matches.
+      // The od dump shows the svc echoes our X descriptor into the reply
+      // header (size 0x301, addr words) and puts the domain header at the
+      // aligned raw start (byte 32 here): byte0=object count, u16 at +2 =
+      // data size (0x14), u32 at +4 = target object id (echoes the mount
+      // obj). Reference readDomainObjects: ids start at data start + dataSize,
+      // i.e. header + 8 + dataSize. Scan for that exact shape.
+      let h = -1;
+      for (let p = at; p + 8 <= Math.min(b.length, 96); p += 4) {
+        const sz = b[p + 2] + b[p + 3] * 0x100;
+        if (b[p] === 1 && sz > 0 && sz <= 0x800) { h = p; break; }
+      }
+      if (h >= 0) {
+        // Reference domain.js response: header(+0x10-equiv)=count, here also
+        // dataSize u16 and echoed target id; magic h+16, result h+24, data
+        // h+32, returned object ids at data + dataSize (readDomainObjects).
+        const count = b[h], dataSize = b[h + 2] + b[h + 3] * 0x100;
+        const result = u32(b, h + 24);
+        const objects = [];
+        if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, h + 32 + dataSize + 4 * i));
+        return {result, objects, moves, copies, dataAt: h + 32};
+      }
+      // Older reply shape: bare count word, result at +24, ids at +32+size.
       for (let p = at; p + 28 <= Math.min(b.length, 96); p += 4)
         if ((u32(b, p) >>> 0) < 256 && u32(b, p) !== 0) { h = p; break; }
+      if (h < 0) h = at;
       const count = u32(b, h), result = u32(b, h + 24);
       const objects = [];
       if (!result) for (let i = 0; i < count; i++) objects.push(u32(b, h + 32 + u32(b, h + 8) + 4 * i));
@@ -382,8 +394,11 @@
               if (dirH) {
                 const outBuf = W + 0x800n;
                 putBytes(outBuf, new Array(0x620).fill(0));
+                // dirH is a domain object id from the out-object list, so it
+                // rides the same proven wrap on the mount session.
                 const rd = await xfer('rd',
-                  buildPacket(0, [], {recv: [{address: outBuf, size: 0x620}]}), dirH);
+                  domainPacket(Number(dirH), 0, [],
+                    {recv: [{address: outBuf, size: 0x620}]}), mount.handle, true);
                 if (!rd || rd.result !== 0) {
                   await say('[f7] dir read res ' + (rd ? rd.result : 'x'));
                 } else {
