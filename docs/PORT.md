@@ -132,7 +132,7 @@ offers. A timed-out native request must not be replayed.
 | `probes/` | Read-only (one thread-creating) bring-up probes |
 | `tools/` | Operational: `check_loader.py`, artifact validation/regeneration |
 | `tools/analysis/` | Archived research that derived the offsets |
-| `docs/` | Contract, engine/bridge references, findings, offset evidence — indexed in [`docs/README.md`](docs/README.md) |
+| `docs/` | Contract, engine/bridge references, findings, offset evidence — indexed in [`README.md`](README.md) |
 
 ## Before any run
 

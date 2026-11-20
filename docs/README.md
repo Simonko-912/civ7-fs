@@ -45,9 +45,9 @@ them onto this tree.
 | `port/engine/shared/sdk-*.json`, `port/engine/switch2/app/*.json` | [`../targets/smilebasic/`](../targets/smilebasic/) |
 | `port/OFFSETS-REPORT.md`, `port/APP-OFFSETS-REPORT.md`, … | [`reports/`](reports/) |
 | `port/validate_offsets.py` | [`../tools/validate_offsets.py`](../tools/validate_offsets.py) |
-| `send_payload.py`, `save-tools/send_js.py` | [`../../../send_js.py`](../../../send_js.py) |
+| `send_payload.py`, `save-tools/send_js.py` | [`../send_js.py`](../send_js.py) |
 | `set-pc-ip.ps1`, `run-p4-once.ps1` | the engine itself: `node ../../port/engine/run.cjs CONSOLE-IP` |
-| `save-tools/`, `switch1/*.nro` | not shipped — the loader and its trigger come from `../../../installer-creator/` and `../../../PicoSwitch/` |
+| `save-tools/`, `switch1/*.nro` | not shipped — the loader and its trigger come from `../../installer-creator/` and `../../PicoSwitch/` |
 
 ## Why the tree looks like this
 
